@@ -43,10 +43,20 @@ var (
 // Reconciler implements common reconciler behavior across different Tekton Run
 // Object types.
 type Reconciler struct {
-	resultsClient *results.Client
-	objectClient  ObjectClient
-	cfg           *reconciler.Config
+	resultsClient          *results.Client
+	objectClient           ObjectClient
+	cfg                    *reconciler.Config
+	IsReadyForDeletionFunc IsReadyForDeletion
 }
+
+// IsReadyForDeletion is a predicate function which indicates whether the object
+// being reconciled is ready to be garbage collected. Besides the reqirements
+// that are already enforced by this reconciler, callers may define more
+// specific constraints by providing a function that has the below signature to
+// the Reconciler instance. For instance, the controller that reconciles
+// PipelineRuns can verify whether all dependent TaskRuns are up to date in the
+// API server before deleting all objects in cascade.
+type IsReadyForDeletion func(ctx context.Context, object results.Object) (bool, error)
 
 // NewDynamicReconciler creates a new dynamic Reconciler.
 func NewDynamicReconciler(rc pb.ResultsClient, oc ObjectClient, cfg *reconciler.Config) *Reconciler {
@@ -54,6 +64,10 @@ func NewDynamicReconciler(rc pb.ResultsClient, oc ObjectClient, cfg *reconciler.
 		resultsClient: &results.Client{ResultsClient: rc},
 		objectClient:  oc,
 		cfg:           cfg,
+		// Always true predicate.
+		IsReadyForDeletionFunc: func(ctx context.Context, object results.Object) (bool, error) {
+			return true, nil
+		},
 	}
 }
 
@@ -100,11 +114,11 @@ func (r *Reconciler) addResultsAnnotations(ctx context.Context, o results.Object
 	objectAnnotations := o.GetAnnotations()
 	if r.cfg.GetDisableAnnotationUpdate() {
 		logger.Debug("Skipping CRD annotation patch: annotation update is disabled")
-	} else if result.GetName() == objectAnnotations[annotation.Result] && record.GetName() == objectAnnotations[annotation.Record] {
+	} else if annotation.IsPatched(o) && result.GetName() == objectAnnotations[annotation.Result] && record.GetName() == objectAnnotations[annotation.Record] {
 		logger.Debug("Skipping CRD annotation patch: Result annotations are already set")
 	} else {
 		// Update object with Result Annotations.
-		patch, err := annotation.Add(result.GetName(), record.GetName())
+		patch, err := annotation.Patch(o, result.GetName(), record.GetName())
 		if err != nil {
 			logger.Errorw("Error adding Result annotations", zap.Error(err))
 			return err
@@ -124,6 +138,7 @@ func (r *Reconciler) addResultsAnnotations(ctx context.Context, o results.Object
 // * The object is done and it isn't owned by other object.
 // * The configured grace period has elapsed since the object's completion.
 // * The object satisfies all label requirements defined in the supplied config.
+// * The assigned isReadyForDeletionFunc returns true.
 func (r *Reconciler) deleteUponCompletion(ctx context.Context, o results.Object) error {
 	logger := logging.FromContext(ctx)
 
@@ -166,6 +181,12 @@ func (r *Reconciler) deleteUponCompletion(ctx context.Context, o results.Object)
 	if selectors := r.cfg.GetLabelSelector(); !selectors.Matches(labels.Set(o.GetLabels())) {
 		logger.Debugw("Object doesn't match the required label selectors - requeuing to process later", zap.String("results.tekton.dev/label-selectors", selectors.String()))
 		return controller.NewRequeueAfter(1 * time.Minute)
+	}
+
+	if isReady, err := r.IsReadyForDeletionFunc(ctx, o); err != nil {
+		return err
+	} else if !isReady {
+		return controller.NewRequeueAfter(30 * time.Second)
 	}
 
 	logger.Infow("Deleting object", zap.String("results.tekton.dev/uid", string(o.GetUID())),

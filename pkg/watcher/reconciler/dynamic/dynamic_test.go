@@ -16,6 +16,7 @@ package dynamic
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -30,23 +31,16 @@ import (
 	"github.com/tektoncd/results/pkg/watcher/reconciler/annotation"
 	pb "github.com/tektoncd/results/proto/v1alpha2/results_go_proto"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/errors"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	dynamicclient "k8s.io/client-go/dynamic/fake"
 	"knative.dev/pkg/apis"
 	duckv1beta1 "knative.dev/pkg/apis/duck/v1beta1"
 	"knative.dev/pkg/controller"
 
 	// Needed for informer injection.
 	_ "github.com/tektoncd/pipeline/test"
+	watcherresults "github.com/tektoncd/results/pkg/watcher/results"
 )
-
-type env struct {
-	ctx     context.Context
-	ctrl    *controller.Impl
-	results pb.ResultsClient
-	dynamic *dynamicclient.FakeDynamicClient
-}
 
 var (
 	taskrun = &v1beta1.TaskRun{
@@ -205,7 +199,7 @@ func TestReconcile_TaskRun(t *testing.T) {
 		}
 
 		_, err := trclient.Get(ctx, taskrun.GetName(), metav1.GetOptions{})
-		if !errors.IsNotFound(err) {
+		if !apierrors.IsNotFound(err) {
 			t.Fatalf("wanted NotFound, got %v", err)
 		}
 	})
@@ -235,7 +229,50 @@ func TestReconcile_TaskRun(t *testing.T) {
 		}
 
 		// Make sure that the resource no longer exists
-		if _, err := trclient.Get(ctx, taskrun.GetName(), metav1.GetOptions{}); !errors.IsNotFound(err) {
+		if _, err := trclient.Get(ctx, taskrun.GetName(), metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+			t.Fatalf("Want NotFound, but got %v", err)
+		}
+	})
+
+	t.Run("wait until the isReadyForDeletionFunc returns true to delete the object", func(t *testing.T) {
+		// Recreate the object to retest the deletion
+		if _, err := trclient.Create(ctx, taskrun, metav1.CreateOptions{}); err != nil {
+			t.Fatal(err)
+		}
+
+		// Pretend that the isReadyForDeletionFunc returns an error.
+		errSomethingBad := errors.New("Something really bad happened")
+		r.IsReadyForDeletionFunc = func(_ context.Context, object watcherresults.Object) (bool, error) {
+			return false, errSomethingBad
+		}
+
+		// Then the controller should return the same error
+		if err := r.Reconcile(ctx, taskrun); !errors.Is(err, errSomethingBad) {
+			t.Fatalf("Want %v, but got %v", errSomethingBad, err)
+		}
+
+		// Assign a predicate that checks if a given annotation exists.
+		r.IsReadyForDeletionFunc = func(_ context.Context, object watcherresults.Object) (bool, error) {
+			_, found := object.GetAnnotations()["x"]
+			return found, nil
+		}
+
+		// The controller must return a RequeueKeyError because the
+		// TaskRun doesn't have this annotation
+		if err := r.Reconcile(ctx, taskrun); !isRequeueKey(err) {
+			t.Fatalf("Want a controller.RequeueKey error, but got %v", err)
+		}
+
+		// Set the expected annotation and reconcile.
+		taskrun.Annotations = map[string]string{
+			"x": "foo",
+		}
+		if err := r.Reconcile(ctx, taskrun); err != nil {
+			t.Fatal(err)
+		}
+
+		// Make sure that the resource no longer exists
+		if _, err := trclient.Get(ctx, taskrun.GetName(), metav1.GetOptions{}); !apierrors.IsNotFound(err) {
 			t.Fatalf("Want NotFound, but got %v", err)
 		}
 	})

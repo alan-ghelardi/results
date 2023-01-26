@@ -30,14 +30,15 @@ import (
 
 	"time"
 
+	"os"
+	"path"
+
 	"github.com/tektoncd/pipeline/pkg/apis/pipeline/v1beta1"
 	clientset "github.com/tektoncd/pipeline/pkg/client/clientset/versioned/typed/pipeline/v1beta1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/tools/clientcmd"
-	"os"
-	"path"
 	"sigs.k8s.io/yaml"
 )
 
@@ -102,7 +103,7 @@ func TestTaskRun(t *testing.T) {
 		}
 	})
 
-	t.Run("Run Cleanup", func(t *testing.T) {
+	t.Run("TaskRun Cleanup", func(t *testing.T) {
 		if err := wait.PollImmediate(1*time.Second, 1*time.Minute, func() (done bool, err error) {
 			tr, err := c.TaskRuns(ns).Get(ctx, tr.GetName(), metav1.GetOptions{})
 			if errors.IsNotFound(err) {
@@ -136,21 +137,36 @@ func TestPipelineRun(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	// Wait for Result ID to show up.
-	if err := wait.PollImmediate(1*time.Second, 1*time.Minute, func() (done bool, err error) {
-		pr, err := c.PipelineRuns(ns).Get(ctx, pr.GetName(), metav1.GetOptions{})
-		if err != nil {
-			t.Logf("Get: %v", err)
+	t.Run("result annotations", func(t *testing.T) {
+		// Wait for Result ID to show up.
+		if err := wait.PollImmediate(1*time.Second, 1*time.Minute, func() (done bool, err error) {
+			pr, err := c.PipelineRuns(ns).Get(ctx, pr.GetName(), metav1.GetOptions{})
+			if err != nil {
+				t.Logf("Get: %v", err)
+				return false, nil
+			}
+			if r, ok := pr.GetAnnotations()["results.tekton.dev/result"]; ok {
+				t.Logf("Found Result: %s", r)
+				return true, nil
+			}
 			return false, nil
+		}); err != nil {
+			t.Fatalf("error waiting for Result ID: %v", err)
 		}
-		if r, ok := pr.GetAnnotations()["results.tekton.dev/result"]; ok {
-			t.Logf("Found Result: %s", r)
-			return true, nil
+	})
+
+	t.Run("PipelineRun cleanup", func(t *testing.T) {
+		if err := wait.PollImmediate(1*time.Second, 1*time.Minute, func() (done bool, err error) {
+			pr, err := c.PipelineRuns(ns).Get(ctx, pr.GetName(), metav1.GetOptions{})
+			if errors.IsNotFound(err) {
+				return true, nil
+			}
+			t.Logf("Get: %+v, %v", pr.GetName(), err)
+			return false, nil
+		}); err != nil {
+			t.Fatalf("error waiting PipelineRun to be deleted: %v", err)
 		}
-		return false, nil
-	}); err != nil {
-		t.Fatalf("error waiting for Result ID: %v", err)
-	}
+	})
 }
 
 func client(t *testing.T) *clientset.TektonV1beta1Client {
