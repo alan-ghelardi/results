@@ -30,12 +30,15 @@ import (
 	"github.com/tektoncd/results/pkg/watcher/reconciler"
 	"github.com/tektoncd/results/pkg/watcher/reconciler/annotation"
 	pb "github.com/tektoncd/results/proto/v1alpha2/results_go_proto"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"knative.dev/pkg/apis"
 	duckv1beta1 "knative.dev/pkg/apis/duck/v1beta1"
 	"knative.dev/pkg/controller"
+	"knative.dev/pkg/kmeta"
 
 	// Needed for informer injection.
 	_ "github.com/tektoncd/pipeline/test"
@@ -131,16 +134,39 @@ func TestReconcile_TaskRun(t *testing.T) {
 	}
 
 	r := NewDynamicReconciler(results, trclient, cfg)
-	if err := r.Reconcile(ctx, taskrun); err != nil {
-		t.Fatal(err)
-	}
 
 	isRequeueKey := func(err error) bool {
 		ok, _ := controller.IsRequeueKey(err)
 		return ok
 	}
 
-	t.Run("DisabledAnnotations", func(t *testing.T) {
+	t.Run("requeue the object if the parent result is missing and the TaskRun is a child resource", func(t *testing.T) {
+		// Emulate a flow in which the TaskRun is owned by a
+		// PipelineRun.
+		childTaskRun := taskrun.DeepCopy()
+		childTaskRun.OwnerReferences = []metav1.OwnerReference{
+			*kmeta.NewControllerRef(pipelinerun),
+		}
+
+		// The controller must requeue the object because the parent
+		// result is missing and the TaskRun is owned by a PipelineRun.
+		if err := r.Reconcile(ctx, childTaskRun); !isRequeueKey(err) {
+			t.Fatalf("Want a controller.RequeueKey error, but got %v", err)
+		}
+
+		// Make sure that there were no side effects (i.e. the parent
+		// result doesn't exist indeed.)
+		resultName := result.FormatName(childTaskRun.GetNamespace(), string(childTaskRun.GetUID()))
+		if _, err := results.GetResult(ctx, &pb.GetResultRequest{Name: resultName}); status.Code(err) != codes.NotFound {
+			t.Fatalf("Want a not found error, but got %v", err)
+		}
+	})
+
+	t.Run("reconcile the TaskRun and create the result and the record", func(t *testing.T) {
+		if err := r.Reconcile(ctx, taskrun); err != nil {
+			t.Fatal(err)
+		}
+
 		resultName := result.FormatName(taskrun.GetNamespace(), string(taskrun.GetUID()))
 		if _, err := results.GetResult(ctx, &pb.GetResultRequest{Name: resultName}); err != nil {
 			t.Fatalf("GetResult: %v", err)
@@ -151,28 +177,30 @@ func TestReconcile_TaskRun(t *testing.T) {
 		}
 	})
 
-	// Enable Annotation Updates, re-reconcile
-	cfg.DisableAnnotationUpdate = false
-	if err := r.Reconcile(ctx, taskrun); err != nil {
-		t.Fatal(err)
-	}
-
-	tr, err := trclient.Get(ctx, taskrun.GetName(), metav1.GetOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, a := range []string{annotation.Result, annotation.Record} {
-		if _, ok := tr.GetAnnotations()[a]; !ok {
-			t.Errorf("annotation %s missing", a)
+	t.Run("enable annotation patching", func(t *testing.T) {
+		// Enable Annotation Updates, re-reconcile
+		cfg.DisableAnnotationUpdate = false
+		if err := r.Reconcile(ctx, taskrun); err != nil {
+			t.Fatal(err)
 		}
-	}
 
-	if _, err := results.GetResult(ctx, &pb.GetResultRequest{Name: tr.GetAnnotations()[annotation.Result]}); err != nil {
-		t.Fatalf("GetResult: %v", err)
-	}
-	if _, err := results.GetRecord(ctx, &pb.GetRecordRequest{Name: tr.GetAnnotations()[annotation.Record]}); err != nil {
-		t.Fatalf("GetRecord: %v", err)
-	}
+		tr, err := trclient.Get(ctx, taskrun.GetName(), metav1.GetOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, a := range []string{annotation.Result, annotation.Record} {
+			if _, ok := tr.GetAnnotations()[a]; !ok {
+				t.Errorf("annotation %s missing", a)
+			}
+		}
+
+		if _, err := results.GetResult(ctx, &pb.GetResultRequest{Name: tr.GetAnnotations()[annotation.Result]}); err != nil {
+			t.Fatalf("GetResult: %v", err)
+		}
+		if _, err := results.GetRecord(ctx, &pb.GetRecordRequest{Name: tr.GetAnnotations()[annotation.Record]}); err != nil {
+			t.Fatalf("GetRecord: %v", err)
+		}
+	})
 
 	t.Run("DeleteObject", func(t *testing.T) {
 		// Enable object deletion, re-reconcile
