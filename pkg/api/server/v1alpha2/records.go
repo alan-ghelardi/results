@@ -125,7 +125,7 @@ func (s *Server) GetRecord(ctx context.Context, req *pb.GetRecordRequest) (*pb.R
 func getRecord(txn *gorm.DB, parent, result, name string) (*db.Record, error) {
 	store := &db.Record{}
 	q := txn.
-		Where(&db.Record{Result: db.Result{Parent: parent, Name: result}, Name: name}).
+		Where(&db.Record{Parent: parent, ResultName: result, Name: name}).
 		First(store)
 	if err := errors.Wrap(q.Error); err != nil {
 		return nil, err
