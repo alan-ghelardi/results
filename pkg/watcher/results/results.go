@@ -16,6 +16,7 @@ package results
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -35,6 +36,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"knative.dev/pkg/apis"
+	"knative.dev/pkg/controller"
 	"knative.dev/pkg/logging"
 )
 
@@ -145,6 +147,25 @@ func (c *Client) ensureResult(ctx context.Context, o Object, opts ...grpc.CallOp
 		},
 	}
 
+	// Set the Result.Annotations and Result.Summary.Annotations fields if
+	// the object in question contains the required annotations.
+
+	if value, found := o.GetAnnotations()[annotation.ResultAnnotations]; found {
+		if annotations, err := parseAnnotations(annotation.ResultAnnotations, value); err != nil {
+			return nil, err
+		} else {
+			new.Annotations = annotations
+		}
+	}
+
+	if value, found := o.GetAnnotations()[annotation.RecordSummaryAnnotations]; found {
+		if annotations, err := parseAnnotations(annotation.RecordSummaryAnnotations, value); err != nil {
+			return nil, err
+		} else {
+			new.Summary.Annotations = annotations
+		}
+	}
+
 	if curr == nil {
 		logger.Debug("Result doesn't exist yet - creating")
 		req := &pb.CreateResultRequest{
@@ -166,6 +187,15 @@ func (c *Client) ensureResult(ctx context.Context, o Object, opts ...grpc.CallOp
 		Result: new,
 	}
 	return c.ResultsClient.UpdateResult(ctx, req, opts...)
+}
+
+// parseAnnotations attempts to return the provided value as a map of strings.
+func parseAnnotations(annotationKey, value string) (map[string]string, error) {
+	var annotations map[string]string
+	if err := json.Unmarshal([]byte(value), &annotations); err != nil {
+		return nil, controller.NewPermanentError(fmt.Errorf("error parsing annotation %s: %w", annotationKey, err))
+	}
+	return annotations, nil
 }
 
 func getTimestamp(c *apis.Condition) *timestamppb.Timestamp {

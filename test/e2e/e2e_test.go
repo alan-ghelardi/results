@@ -12,13 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build e2e
-// +build e2e
-
 package e2e
 
 import (
 	"context"
+	"encoding/json"
 	"io/ioutil"
 	"testing"
 
@@ -27,6 +25,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/testing/protocmp"
+	"knative.dev/pkg/apis"
 
 	"time"
 
@@ -137,6 +136,8 @@ func TestPipelineRun(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
+	var resultID string
+
 	t.Run("result annotations", func(t *testing.T) {
 		// Wait for Result ID to show up.
 		if err := wait.PollImmediate(1*time.Second, 1*time.Minute, func() (done bool, err error) {
@@ -147,6 +148,7 @@ func TestPipelineRun(t *testing.T) {
 			}
 			if r, ok := pr.GetAnnotations()["results.tekton.dev/result"]; ok {
 				t.Logf("Found Result: %s", r)
+				resultID = r
 				return true, nil
 			}
 			return false, nil
@@ -166,6 +168,60 @@ func TestPipelineRun(t *testing.T) {
 		}); err != nil {
 			t.Fatalf("error waiting PipelineRun to be deleted: %v", err)
 		}
+	})
+
+	t.Run("result data consistency", func(t *testing.T) {
+		client := newResultsClient(t, allNamespacesReadAccessPath)
+		result, err := client.GetResult(context.Background(), &resultsv1alpha2.GetResultRequest{
+			Name: resultID,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		t.Run("Result and RecordSummary Annotations were set accordingly", func(t *testing.T) {
+			if diff := cmp.Diff(map[string]string{
+				"repo":   "tektoncd/results",
+				"commit": "1a6b908",
+			}, result.Annotations); diff != "" {
+				t.Errorf("Result.Annotations: mismatch (-want +got):\n%s", diff)
+			}
+
+			if diff := cmp.Diff(map[string]string{
+				"foo": "bar",
+			}, result.Summary.Annotations); diff != "" {
+				t.Errorf("Result.Summary.Annotations: mismatch (-want +got):\n%s", diff)
+			}
+		})
+
+		t.Run("the PipelineRun was archived in its final state", func(t *testing.T) {
+			wantStatus := resultsv1alpha2.RecordSummary_SUCCESS
+			gotStatus := result.Summary.Status
+			if wantStatus != gotStatus {
+				t.Fatalf("Result.Summary.Status: want %v, but got %v", wantStatus, gotStatus)
+			}
+
+			record, err := client.GetRecord(context.Background(), &resultsv1alpha2.GetRecordRequest{
+				Name: result.Summary.Record,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			var pipelineRun v1beta1.PipelineRun
+			if err := json.Unmarshal(record.Data.Value, &pipelineRun); err != nil {
+				t.Fatal(err)
+			}
+
+			if !pipelineRun.IsDone() {
+				t.Fatal("Want PipelineRun to be done, but it isn't")
+			}
+
+			wantReason := v1beta1.PipelineRunReasonSuccessful
+			if gotReason := pipelineRun.Status.GetCondition(apis.ConditionSucceeded).GetReason(); wantReason != v1beta1.PipelineRunReason(gotReason) {
+				t.Fatalf("PipelineRun: want condition reason %s, but got %s", wantReason, gotReason)
+			}
+		})
 	})
 }
 
