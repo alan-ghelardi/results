@@ -17,11 +17,12 @@ package server
 import (
 	"context"
 	"fmt"
-	"github.com/tektoncd/results/pkg/api/server/config"
-	"github.com/tektoncd/results/pkg/api/server/logger"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/tektoncd/results/pkg/api/server/config"
+	"github.com/tektoncd/results/pkg/api/server/logger"
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/tektoncd/results/pkg/api/server/db/pagination"
@@ -618,7 +619,7 @@ func TestListResults(t *testing.T) {
 	}
 	for _, tc := range tt {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := srv.ListResults(ctx, tc.req)
+			got, err := srv.ListResultsv2(ctx, tc.req)
 			if status.Code(err) != tc.status {
 				t.Fatal(err)
 			}
