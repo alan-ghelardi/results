@@ -23,6 +23,7 @@ import (
 
 	"github.com/google/cel-go/cel"
 	celenv "github.com/tektoncd/results/pkg/api/server/cel"
+	"github.com/tektoncd/results/pkg/api/server/cel2sql"
 	"github.com/tektoncd/results/pkg/api/server/db"
 	"github.com/tektoncd/results/pkg/api/server/db/errors"
 	"github.com/tektoncd/results/pkg/api/server/db/pagination"
@@ -175,6 +176,51 @@ func (s *Server) DeleteResult(ctx context.Context, req *pb.DeleteResultRequest) 
 	// Delete the result.
 	delete := s.db.WithContext(ctx).Delete(&db.Result{}, r)
 	return &empty.Empty{}, errors.Wrap(delete.Error)
+}
+
+// ListResultsv2 ...
+func (s *Server) ListResultsv2(ctx context.Context, req *pb.ListResultsRequest) (*pb.ListResultsResponse, error) {
+	if req.GetParent() == "" {
+		return nil, status.Error(codes.InvalidArgument, "parent missing")
+	}
+	if err := s.auth.Check(ctx, req.GetParent(), auth.ResourceResults, auth.PermissionList); err != nil {
+		return nil, err
+	}
+
+	q := s.db.WithContext(ctx)
+	// Specifying `-` allows users to read Results from any parent.
+	// See https://google.aip.dev/159 for more details.
+	if parent := req.GetParent(); parent != "-" {
+		q = q.Where("parent = ?", parent)
+	}
+
+	if filter := req.GetFilter(); filter != "" {
+		sqlFilters, err := cel2sql.Convert(s.resultsEnv, filter)
+		if err != nil {
+			return nil, status.Error(codes.InvalidArgument, err.Error())
+		}
+		q = q.Where(sqlFilters)
+	}
+
+	if sortOrder := req.GetOrderBy(); sortOrder != "" {
+		q.Order(sortOrder)
+	}
+
+	dbresults := make([]*db.Result, 0, 0)
+
+	q.Find(&dbresults)
+	if err := errors.Wrap(q.Error); err != nil {
+		return nil, err
+	}
+
+	out := make([]*pb.Result, 0)
+	for _, model := range dbresults {
+		out = append(out, result.ToAPI(model))
+	}
+
+	return &pb.ListResultsResponse{
+		Results: out,
+	}, nil
 }
 
 func (s *Server) ListResults(ctx context.Context, req *pb.ListResultsRequest) (*pb.ListResultsResponse, error) {
