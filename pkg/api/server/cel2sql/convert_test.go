@@ -120,10 +120,20 @@ func TestConvertResultExpressions(t *testing.T) {
 		in   string
 		want string
 	}{{
-		name: "Result.Annotations field",
-		in:   `annotations["repo"] == "tektoncd/results"`,
-		want: `annotations @> '{"repo":"tektoncd/results"}'::jsonb`,
+		name: "Result.Parent field",
+		in:   `parent.endsWith("bar")`,
+		want: "parent LIKE '%' || 'bar'",
 	},
+		{
+			name: "Result.Id field",
+			in: `id == "foo"`,
+			want: "id = 'foo'",
+		},
+		{
+			name: "Result.Annotations field",
+			in:   `annotations["repo"] == "tektoncd/results"`,
+			want: `annotations @> '{"repo":"tektoncd/results"}'::jsonb`,
+		},
 		{
 			name: "Result.Annotations field",
 			in:   `"tektoncd/results" == annotations["repo"]`,
