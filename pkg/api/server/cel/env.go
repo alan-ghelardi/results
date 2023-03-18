@@ -21,6 +21,8 @@ func NewResultsEnv() (*cel.Env, error) {
 		),
 		cel.Declarations(recordSummaryStatusConsts()...),
 		cel.Types(&resultspb.RecordSummary{}),
+		cel.Variable("parent", cel.StringType),
+		cel.Variable("id", cel.StringType),
 		cel.Variable("annotations", cel.MapType(cel.StringType, cel.StringType)),
 		cel.Variable("summary",
 			cel.ObjectType("tekton.results.v1alpha2.RecordSummary")),
