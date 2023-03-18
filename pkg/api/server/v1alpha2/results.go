@@ -183,11 +183,13 @@ func (s *Server) ListResultsv2(ctx context.Context, req *pb.ListResultsRequest) 
 	if req.GetParent() == "" {
 		return nil, status.Error(codes.InvalidArgument, "parent missing")
 	}
+
 	if err := s.auth.Check(ctx, req.GetParent(), auth.ResourceResults, auth.PermissionList); err != nil {
 		return nil, err
 	}
 
 	q := s.db.WithContext(ctx)
+
 	// Specifying `-` allows users to read Results from any parent.
 	// See https://google.aip.dev/159 for more details.
 	if parent := req.GetParent(); parent != "-" {
@@ -202,7 +204,9 @@ func (s *Server) ListResultsv2(ctx context.Context, req *pb.ListResultsRequest) 
 		q = q.Where(sqlFilters)
 	}
 
-	if sortOrder := req.GetOrderBy(); sortOrder != "" {
+	if sortOrder, err := orderBy(req.GetOrderBy()); err != nil {
+		return nil, err
+	} else if sortOrder != "" {
 		q.Order(sortOrder)
 	}
 
