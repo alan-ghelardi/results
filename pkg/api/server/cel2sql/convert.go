@@ -14,6 +14,10 @@ func Convert(env *cel.Env, filters string) (string, error) {
 		return "", fmt.Errorf("error compiling CEL filters: %w", issues.Err())
 	}
 
+	if outputType := ast.OutputType(); !outputType.IsAssignableType(cel.BoolType) {
+		return "", fmt.Errorf("expected boolean expression, but got %s", outputType.String())
+	}
+
 	interpreter, err := newInterpreter(ast)
 	if err != nil {
 		return "", fmt.Errorf("error creating cel2sql interpreter: %w", err)
