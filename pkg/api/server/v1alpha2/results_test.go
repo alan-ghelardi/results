@@ -447,7 +447,7 @@ func TestListResults(t *testing.T) {
 			name: "simple query",
 			req: &pb.ListResultsRequest{
 				Parent: parent,
-				Filter: `result.id == "1"`,
+				Filter: `id == "1"`,
 			},
 			want: &pb.ListResultsResponse{
 				Results: results[:1],
@@ -457,7 +457,7 @@ func TestListResults(t *testing.T) {
 			name: "simple query - function",
 			req: &pb.ListResultsRequest{
 				Parent: parent,
-				Filter: `result.id.endsWith("1")`,
+				Filter: `id.endsWith("1")`,
 			},
 			want: &pb.ListResultsResponse{
 				Results: results[:1],
@@ -467,7 +467,7 @@ func TestListResults(t *testing.T) {
 			name: "complex query",
 			req: &pb.ListResultsRequest{
 				Parent: parent,
-				Filter: `result.id == "1" || result.id == "2"`,
+				Filter: `id == "1" || id == "2"`,
 			},
 			want: &pb.ListResultsResponse{
 				Results: results[:2],
@@ -477,7 +477,7 @@ func TestListResults(t *testing.T) {
 			name: "filter all",
 			req: &pb.ListResultsRequest{
 				Parent: parent,
-				Filter: `result.id == "doesnotexist"`,
+				Filter: `id == "doesnotexist"`,
 			},
 			want: &pb.ListResultsResponse{},
 		},
@@ -485,7 +485,7 @@ func TestListResults(t *testing.T) {
 			name: "filter by annotations",
 			req: &pb.ListResultsRequest{
 				Parent: parent,
-				Filter: `result.annotations["foo"]=="bar-1"`,
+				Filter: `annotations["foo"].endsWith("-1")`,
 			},
 			want: &pb.ListResultsResponse{
 				Results: results[:1],
@@ -495,7 +495,7 @@ func TestListResults(t *testing.T) {
 			name: "non-boolean expression",
 			req: &pb.ListResultsRequest{
 				Parent: parent,
-				Filter: `result.id`,
+				Filter: `id`,
 			},
 			status: codes.InvalidArgument,
 		},

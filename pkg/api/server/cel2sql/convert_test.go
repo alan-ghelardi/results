@@ -1,6 +1,7 @@
 package cel2sql
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/tektoncd/results/pkg/api/server/cel"
@@ -126,7 +127,7 @@ func TestConvertResultExpressions(t *testing.T) {
 	},
 		{
 			name: "Result.Id field",
-			in: `id == "foo"`,
+			in:   `id == "foo"`,
 			want: "id = 'foo'",
 		},
 		{
@@ -200,6 +201,37 @@ func TestConvertResultExpressions(t *testing.T) {
 
 			if diff := cmp.Diff(test.want, got); diff != "" {
 				t.Errorf("Mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestConversionErrors(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want error
+	}{{
+		name: "non-boolean expression",
+		in: "parent",
+		want: errors.New("expected boolean expression, but got string"),
+	},
+	}
+
+	env, err := cel.NewResultsEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := Convert(env, test.in)
+			if err == nil {
+				t.Fatalf("Want the %q error, but the interpreter returned the following result instead: %q", test.want.Error(), got)
+			}
+
+			if diff := cmp.Diff(test.want.Error(), err.Error()); diff != "" {
+				t.Fatalf("Mismatch in the error returned by the Convert function (-want +got):\n%s", diff)
 			}
 		})
 	}
