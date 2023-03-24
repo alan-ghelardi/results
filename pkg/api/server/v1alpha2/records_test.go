@@ -17,11 +17,12 @@ package server
 import (
 	"context"
 	"fmt"
-	"github.com/tektoncd/results/pkg/api/server/config"
-	"github.com/tektoncd/results/pkg/api/server/logger"
 	"strconv"
 	"testing"
 	"time"
+
+	"github.com/tektoncd/results/pkg/api/server/config"
+	"github.com/tektoncd/results/pkg/api/server/logger"
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/tektoncd/pipeline/pkg/apis/pipeline/v1beta1"
@@ -241,6 +242,258 @@ func TestGetRecord(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if _, err := srv.GetRecord(ctx, tc.req); status.Code(err) != tc.want {
 				t.Fatalf("want: %v, got: %v - %+v", tc.want, status.Code(err), err)
+			}
+		})
+	}
+}
+func TestListRecordsV2(t *testing.T) {
+	// Create a temporary database
+	srv, err := New(&config.Config{DB_ENABLE_AUTO_MIGRATION: true}, logger.Get("info"), test.NewDB(t))
+	if err != nil {
+		t.Fatalf("failed to setup db: %v", err)
+	}
+	ctx := context.Background()
+
+	result, err := srv.CreateResult(ctx, &pb.CreateResultRequest{
+		Parent: "foo",
+		Result: &pb.Result{
+			Name: "foo/results/bar",
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateResult: %v", err)
+	}
+
+	records := make([]*pb.Record, 0, 6)
+	// Create 3 TaskRun records
+	for i := 0; i < 3; i++ {
+		fakeClock.Advance(time.Second)
+		r, err := srv.CreateRecord(ctx, &pb.CreateRecordRequest{
+			Parent: result.GetName(),
+			Record: &pb.Record{
+				Name: fmt.Sprintf("%s/records/%d", result.GetName(), i),
+				Data: &pb.Any{
+					Type: "TaskRun",
+					Value: jsonutil.AnyBytes(t, &v1beta1.TaskRun{ObjectMeta: v1.ObjectMeta{
+						Name: fmt.Sprintf("%d", i),
+					}}),
+				},
+			},
+		})
+		if err != nil {
+			t.Fatalf("could not create result: %v", err)
+		}
+		t.Logf("Created record: %+v", r)
+		records = append(records, r)
+	}
+
+	// Create 3 PipelineRun records
+	for i := 3; i < 6; i++ {
+		fakeClock.Advance(time.Second)
+		r, err := srv.CreateRecord(ctx, &pb.CreateRecordRequest{
+			Parent: result.GetName(),
+			Record: &pb.Record{
+				Name: fmt.Sprintf("%s/records/%d", result.GetName(), i),
+				Data: &pb.Any{
+					Type: "PipelineRun",
+					Value: jsonutil.AnyBytes(t, &v1beta1.PipelineRun{ObjectMeta: v1.ObjectMeta{
+						Name: fmt.Sprintf("%d", i),
+					}}),
+				},
+			},
+		})
+		if err != nil {
+			t.Fatalf("could not create result: %v", err)
+		}
+		t.Logf("Created record: %+v", r)
+		records = append(records, r)
+	}
+
+	reversedRecords := make([]*pb.Record, len(records))
+	for i := len(reversedRecords); i > 0; i-- {
+		reversedRecords[len(records)-i] = records[i-1]
+	}
+
+	tt := []struct {
+		name   string
+		req    *pb.ListRecordsRequest
+		want   *pb.ListRecordsResponse
+		status codes.Code
+	}{
+		{
+			name: "all",
+			req: &pb.ListRecordsRequest{
+				Parent: result.GetName(),
+			},
+			want: &pb.ListRecordsResponse{
+				Records: records,
+			},
+		},
+		{
+			name: "list all records without knowing the result name",
+			req: &pb.ListRecordsRequest{
+				Parent: "foo/results/-",
+			},
+			want: &pb.ListRecordsResponse{
+				Records: records,
+			},
+		},
+		{
+			name: "list all records without knowing the parent and the result name",
+			req: &pb.ListRecordsRequest{
+				Parent: "-/results/-",
+			},
+			want: &pb.ListRecordsResponse{
+				Records: records,
+			},
+		},
+		{
+			// TODO: We should return NOT_FOUND in the future.
+			name: "missing parent",
+			req: &pb.ListRecordsRequest{
+				Parent: "foo/results/baz",
+			},
+			status: codes.NotFound,
+		},
+		{
+			name: "filter by record property",
+			req: &pb.ListRecordsRequest{
+				Parent: result.GetName(),
+				// Filter: `name == "foo/results/bar/records/0"`,
+				Filter: `name == "0"`,
+			},
+			want: &pb.ListRecordsResponse{
+				Records: records[:1],
+			},
+		},
+		{
+			name: "filter by record data",
+			req: &pb.ListRecordsRequest{
+				Parent: result.GetName(),
+				Filter: `data.metadata.name == "0"`,
+			},
+			want: &pb.ListRecordsResponse{
+				Records: records[:1],
+			},
+		},
+		{
+			name: "filter by record type",
+			req: &pb.ListRecordsRequest{
+				Parent: result.GetName(),
+				Filter: `data_type == "TaskRun"`,
+			},
+			want: &pb.ListRecordsResponse{
+				Records: records[:3],
+			},
+		},
+		{
+			name: "filter by parent",
+			req: &pb.ListRecordsRequest{
+				Parent: "-/results/-",
+				Filter: fmt.Sprintf(`parent + "/results/" + result_name == %q`, result.GetName()),
+			},
+			want: &pb.ListRecordsResponse{
+				Records: records,
+			},
+		},
+		// TODO: Pagination
+		// Order By
+		{
+			name: "with order asc",
+			req: &pb.ListRecordsRequest{
+				Parent:  result.GetName(),
+				OrderBy: "created_time asc",
+			},
+			want: &pb.ListRecordsResponse{
+				Records: records,
+			},
+		},
+		{
+			name: "with order desc",
+			req: &pb.ListRecordsRequest{
+				Parent:  result.GetName(),
+				OrderBy: "created_time desc",
+			},
+			want: &pb.ListRecordsResponse{
+				Records: reversedRecords,
+			},
+		},
+		{
+			name: "with missing order",
+			req: &pb.ListRecordsRequest{
+				Parent:  result.GetName(),
+				OrderBy: "",
+			},
+			want: &pb.ListRecordsResponse{
+				Records: records,
+			},
+		},
+		{
+			name: "with default order",
+			req: &pb.ListRecordsRequest{
+				Parent:  result.GetName(),
+				OrderBy: "created_time",
+			},
+			want: &pb.ListRecordsResponse{
+				Records: records,
+			},
+		},
+
+		// Errors
+		{
+			name: "unknown type",
+			req: &pb.ListRecordsRequest{
+				Parent: result.GetName(),
+				Filter: `type(record.data) == tekton.pipeline.v1beta1.Unknown`,
+			},
+			status: codes.InvalidArgument,
+		},
+		{
+			name: "unknown any field",
+			req: &pb.ListRecordsRequest{
+				Parent: result.GetName(),
+				Filter: `record.data.metadata.unknown == "tacocat"`,
+			},
+			status: codes.InvalidArgument,
+		},
+		{
+			name: "malformed parent",
+			req: &pb.ListRecordsRequest{
+				Parent: "unknown",
+			},
+			status: codes.InvalidArgument,
+		},
+		{
+			name: "invalid order by clause",
+			req: &pb.ListRecordsRequest{
+				Parent:  result.GetName(),
+				OrderBy: "created_time desc asc",
+			},
+			status: codes.InvalidArgument,
+		},
+		{
+			name: "invalid sort direction",
+			req: &pb.ListRecordsRequest{
+				Parent:  result.GetName(),
+				OrderBy: "created_time foo",
+			},
+			status: codes.InvalidArgument,
+		},
+	}
+
+	for _, tc := range tt {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Logf("Parent: %q\n", tc.req.Parent)
+			got, err := srv.ListRecordsV2(ctx, tc.req)
+			if status.Code(err) != tc.status {
+				t.Fatalf("want %v, got %v", tc.status, err)
+			}
+
+			if diff := cmp.Diff(tc.want, got, protocmp.Transform()); diff != "" {
+				t.Errorf("-want, +got: %s", diff)
+				if name, filter, err := pagination.DecodeToken(got.GetNextPageToken()); err == nil {
+					t.Logf("Next (name, filter) = (%s, %s)", name, filter)
+				}
 			}
 		})
 	}

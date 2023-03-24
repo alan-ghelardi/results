@@ -21,6 +21,7 @@ import (
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/checker/decls"
 	celenv "github.com/tektoncd/results/pkg/api/server/cel"
+	"github.com/tektoncd/results/pkg/api/server/cel2sql"
 	"github.com/tektoncd/results/pkg/api/server/db"
 	"github.com/tektoncd/results/pkg/api/server/db/errors"
 	"github.com/tektoncd/results/pkg/api/server/db/pagination"
@@ -136,6 +137,73 @@ func getRecord(txn *gorm.DB, parent, result, name string) (*db.Record, error) {
 		return nil, err
 	}
 	return store, nil
+}
+
+func (s *Server) ListRecordsV2(ctx context.Context, req *pb.ListRecordsRequest) (*pb.ListRecordsResponse, error) {
+	if req.GetParent() == "" {
+		return nil, status.Error(codes.InvalidArgument, "parent missing")
+	}
+
+	// Authentication
+	parent, resultName, err := result.ParseName(req.GetParent())
+	if err != nil {
+		return nil, err
+	}
+	if err := s.auth.Check(ctx, parent, auth.ResourceRecords, auth.PermissionList); err != nil {
+		return nil, err
+	}
+
+	q := s.db.WithContext(ctx)
+
+	// Specifying `-` allows users to read Results from any parent.
+	// See https://google.aip.dev/159 for more details.
+	if  parent != "-" {
+		q = q.Where("parent = ?", parent)
+	}
+
+	if resultName != "-" {
+		q = q.Where("result_name = ?", resultName)
+	}
+
+	if filter := req.GetFilter(); filter != "" {
+		sqlFilters, err := cel2sql.Convert(s.recordsEnv, filter)
+		if err != nil {
+			return nil, status.Error(codes.InvalidArgument, err.Error())
+		}
+		q = q.Where(sqlFilters)
+	}
+
+	if sortOrder, err := orderBy(req.GetOrderBy()); err != nil {
+		return nil, err
+	} else if sortOrder != "" {
+		q = q.Order(sortOrder)
+	}
+
+	dbrecords := make([]*db.Record, 0)
+	q.Find(&dbrecords)
+	if err := errors.Wrap(q.Error); err != nil {
+		return nil, err
+	}
+	out := make([]*pb.Record, 0)
+	for _, model := range dbrecords {
+		apiObject, err := record.ToAPI(model)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, apiObject)
+	}
+
+	// If we found no record, check if result exists so we can return NotFound
+	if len(out) == 0 {
+		_, err := getResultByParentName(s.db, parent, resultName)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return &pb.ListRecordsResponse{
+		Records: out,
+	}, nil
 }
 
 func (s *Server) ListRecords(ctx context.Context, req *pb.ListRecordsRequest) (*pb.ListRecordsResponse, error) {
