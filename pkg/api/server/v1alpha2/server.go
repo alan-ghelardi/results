@@ -67,11 +67,16 @@ func New(config *config.Config, logger *zap.SugaredLogger, db *gorm.DB, opts ...
 	if err != nil {
 		return nil, err
 	}
+	recordsEnv, err := resultscel.NewRecordsEnv()
+	if err != nil {
+		return nil, err
+	}
 
 	srv := &Server{
 		db:         db,
 		env:        env,
 		resultsEnv: resultsEnv,
+		recordsEnv: recordsEnv,
 		config:     config,
 		logger:     logger,
 		// Default open auth for easier testing.
