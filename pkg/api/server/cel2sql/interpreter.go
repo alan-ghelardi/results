@@ -60,6 +60,9 @@ func (i *interpreter) interpretExpr(expr *exprpb.Expr) error {
 		return i.interpretSelectExpr(id, node)
 
 	case *exprpb.Expr_CallExpr:
+		if isConcat, _, _ := i.mayBeTranslatedIntoStringConcatExpression(expr); isConcat {
+			return i.translateIntoStringConcatExpression(expr)
+		}
 		return i.interpretCallExpr(id, node)
 
 	case *exprpb.Expr_ListExpr:
@@ -228,6 +231,9 @@ func (i *interpreter) interpretBinaryCallExpr(expr *exprpb.Expr_CallExpr) error 
 	}
 
 	sqlOperator := binaryOperators[function]
+	if (i.isString(arg1) || i.isString(arg2)) && isAddOperator(function) {
+		sqlOperator = posgresqlConcatOperator
+	}
 
 	if err := i.interpretExpr(arg1); err != nil {
 		return err
