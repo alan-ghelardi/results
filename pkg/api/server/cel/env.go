@@ -35,6 +35,8 @@ func NewRecordsEnv() (*cel.Env, error) {
 		cel.Declarations(stringConst("PIPELINE_RUN", typePipelineRun),
 			stringConst("TASK_RUN", typeTaskRun),
 		),
+		cel.Variable("parent", cel.StringType),
+		cel.Variable("result_name", cel.StringType),
 		cel.Declarations(decls.NewVar("name", decls.String)),
 		cel.Declarations(decls.NewVar("data_type", decls.String)),
 		cel.Declarations(decls.NewVar("data", decls.Any)),
