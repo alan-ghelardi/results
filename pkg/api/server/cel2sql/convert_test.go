@@ -14,11 +14,12 @@ func TestConvertRecordExpressions(t *testing.T) {
 		name string
 		in   string
 		want string
-	}{{
-		name: "simple expression",
-		in:   `name == "foo"`,
-		want: "name = 'foo'",
-	},
+	}{
+		{
+			name: "simple expression",
+			in:   `name == "foo"`,
+			want: "name = 'foo'",
+		},
 		{
 			name: "select expression",
 			in:   `data.metadata.namespace == "default"`,
@@ -43,6 +44,16 @@ func TestConvertRecordExpressions(t *testing.T) {
 			name: "index operator",
 			in:   `data.metadata.labels["foo"] == "bar"`,
 			want: "(data->'metadata'->'labels'->>'foo') = 'bar'",
+		},
+		{
+			name: "concatenate strings",
+			in:   `name + "bar" == "foobar"`,
+			want: "CONCAT(name, 'bar') = 'foobar'",
+		},
+		{
+			name: "multiple concatenate strings",
+			in:   `name + "bar" + "baz" == "foobarbaz"`,
+			want: "CONCAT(name, 'bar', 'baz') = 'foobarbaz'",
 		},
 		{
 			name: "contains string function",
@@ -213,7 +224,7 @@ func TestConversionErrors(t *testing.T) {
 		want error
 	}{{
 		name: "non-boolean expression",
-		in: "parent",
+		in:   "parent",
 		want: errors.New("expected boolean expression, but got string"),
 	},
 	}
