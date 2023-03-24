@@ -26,6 +26,7 @@ var (
 		operators.Modulo:        "%",
 		operators.In:            "IN",
 	}
+	posgresqlConcatOperator = "||"
 )
 
 // isUnaryOperator returns true if the symbol in question is a CEL unary
@@ -40,4 +41,8 @@ func isUnaryOperator(symbol string) bool {
 func isBinaryOperator(symbol string) bool {
 	_, found := binaryOperators[symbol]
 	return found
+}
+
+func isAddOperator(symbol string) bool {
+	return symbol == operators.Add
 }

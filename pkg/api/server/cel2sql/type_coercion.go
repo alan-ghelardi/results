@@ -15,6 +15,17 @@ func (i *interpreter) isDyn(expr *exprpb.Expr) bool {
 	return false
 }
 
+// isString returns true if the provided expression is a CEL string type or
+// false otherwise.
+func (i *interpreter) isString(expr *exprpb.Expr) bool {
+	if theType, found := i.checkedExpr.TypeMap[expr.GetId()]; found {
+		if p, ok := theType.GetTypeKind().(*exprpb.Type_Primitive); ok {
+			return p.Primitive == exprpb.Type_STRING
+		}
+	}
+	return false
+}
+
 func (i *interpreter) isRecordSummary(expr *exprpb.Expr) bool {
 	if theType, found := i.checkedExpr.TypeMap[expr.GetId()]; found {
 		if messageType := theType.GetMessageType(); messageType == "tekton.results.v1alpha2.RecordSummary" {
