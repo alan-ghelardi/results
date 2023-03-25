@@ -131,14 +131,20 @@ func (i *interpreter) interpretConstExpr(id int64, expr *exprpb.Constant) error 
 	return nil
 }
 
+var identToColumn = map[string]string{
+	"uid":         "id",
+	"create_time": "created_time",
+	"update_time": "updated_time",
+	"data_type":   "type",
+}
+
 func (i *interpreter) interpretIdentExpr(id int64, expr *exprpb.Expr_IdentExpr) error {
 	if reference, found := i.checkedExpr.ReferenceMap[id]; found && reference.GetValue() != nil {
 		return i.interpretConstExpr(id, reference.GetValue())
 	}
 	name := expr.IdentExpr.GetName()
-	if name == "data_type" {
-		// This field maps to the records.type column.
-		name = "type"
+	if column, found := identToColumn[name]; found {
+		name = column
 	}
 	i.query.WriteString(name)
 	return nil

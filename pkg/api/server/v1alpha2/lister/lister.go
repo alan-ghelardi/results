@@ -1,0 +1,193 @@
+// Copyright 2023 The Tekton Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package lister
+
+import (
+	"context"
+	"strings"
+
+	"google.golang.org/protobuf/types/known/timestamppb"
+
+	"github.com/google/cel-go/cel"
+	"github.com/tektoncd/results/pkg/api/server/db"
+	"github.com/tektoncd/results/pkg/api/server/db/errors"
+	pagetokenpb "github.com/tektoncd/results/pkg/api/server/v1alpha2/lister/proto/pagetoken_go_proto"
+	"github.com/tektoncd/results/pkg/api/server/v1alpha2/result"
+	resultspb "github.com/tektoncd/results/proto/v1alpha2/results_go_proto"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	"gorm.io/gorm"
+)
+
+type queryBuilder interface {
+	validateToken(token *pagetokenpb.PageToken) error
+	build(db *gorm.DB) (*gorm.DB, error)
+}
+
+// Converter is a generic function which converts a database model to its wire
+// form.
+type Converter[M any, W any] func(M) W
+
+// PageTokenGenerator takes a wire object and returns a page token for
+// retrieving more resources from thee API.
+type PageTokenGenerator[W any] func(object W) (*pagetokenpb.PageToken, error)
+
+// Lister is a generic utility to list, filter, sort and paginate Results and
+// Records in a uniform and consistent manner.
+type Lister[M any, W any] struct {
+	queryBuilders    []queryBuilder
+	pageToken        *pagetokenpb.PageToken
+	convert          Converter[M, W]
+	genNextPageToken PageTokenGenerator[W]
+}
+
+func (l *Lister[M, W]) buildQuery(ctx context.Context, db *gorm.DB) (*gorm.DB, error) {
+	var err error
+	db = db.WithContext(ctx)
+	for _, builder := range l.queryBuilders {
+		// First, let queryBuilders validate the incoming token if
+		// applicable to make sure that the query parameters match those
+		// passed in the previous request or that the token in question
+		// wasn't improperly modified by the caller.
+		if l.pageToken != nil {
+			if err := builder.validateToken(l.pageToken); err != nil {
+				return nil, status.Errorf(codes.InvalidArgument, "invalid page token: %v", err)
+			}
+		}
+
+		// Add clauses for filtering, sorting and paginating resources.
+		db, err = builder.build(db)
+		if err != nil {
+			return nil, status.Error(codes.InvalidArgument, err.Error())
+		}
+	}
+	return db, nil
+}
+
+// List lists resources applying filters, sorting elements and handling
+// pagination. It returns resources in their wire form and a token to be used
+// later for retrieving more pages if applicable.
+func (l *Lister[M, W]) List(ctx context.Context, db *gorm.DB) ([]W, string, error) {
+	var err error
+	db, err = l.buildQuery(ctx, db)
+	if err != nil {
+		return nil, "", err
+	}
+
+	var models = make([]M, 0)
+	db.Find(&models)
+
+	if err := errors.Wrap(err); err != nil {
+		return nil, "", err
+	}
+
+	wire := make([]W, 0, len(models))
+	for _, model := range models {
+		wire = append(wire, l.convert(model))
+	}
+
+	var nextPageToken string
+	if len(wire) != 0 {
+		// Generate the page token using the last resource in thee
+		// returned collection, so it will be used as the starting point
+		// for next queries.
+		if pageToken, genErr := l.genNextPageToken(wire[len(wire)-1]); genErr != nil {
+			return nil, "", status.Error(codes.Internal, genErr.Error())
+		} else {
+			nextPageToken, err = EncodePageToken(pageToken)
+		}
+	}
+
+	return wire, nextPageToken, err
+}
+
+// OfResults creates a Lister for Result objects.
+func OfResults(env *cel.Env, request *resultspb.ListResultsRequest) (*Lister[*db.Result, *resultspb.Result], error) {
+	pageToken, err := DecodePageToken(strings.TrimSpace(request.GetPageToken()))
+	if err != nil {
+		return nil, err
+	}
+
+	parent := strings.TrimSpace(request.GetParent())
+	if pageToken != nil && pageToken.Parent != parent {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid page token: provided parent (%s) differs from the parent used in the previous query (%s)", parent, pageToken.Parent)
+	}
+
+	order, err := newOrder(strings.TrimSpace(request.GetOrderBy()), resultsColumnsToFields, resultsFieldsToColumns)
+	if err != nil {
+		return nil, err
+	}
+
+	filter := &filter{
+		env:  env,
+		expr: strings.TrimSpace(request.GetFilter()),
+		equalityClauses: []equalityClause{{
+			columnName: "parent",
+			value:      parent,
+		},
+		},
+	}
+
+	return &Lister[*db.Result, *resultspb.Result]{
+		queryBuilders: []queryBuilder{
+			&offset{order: order, pageToken: pageToken},
+			filter,
+			order,
+			&limit{pageSize: int(request.GetPageSize())},
+		},
+		pageToken: pageToken,
+		convert:   result.ToAPI,
+		genNextPageToken: func(result *resultspb.Result) (*pagetokenpb.PageToken, error) {
+			pageToken := &pagetokenpb.PageToken{
+				Parent: parent,
+				Filter: filter.expr,
+				LastItem: &pagetokenpb.Item{
+					Uid: result.Uid,
+				},
+			}
+
+			if fieldName := order.fieldName; fieldName != "" {
+				pageToken.LastItem.OrderBy = &pagetokenpb.Order{
+					FieldName: fieldName,
+					Value:     getResultTimestamp(result, fieldName),
+					Direction: pagetokenpb.Order_Direction(pagetokenpb.Order_Direction_value[order.direction]),
+				}
+			}
+
+			return pageToken, nil
+		},
+	}, nil
+}
+
+func getResultTimestamp(result *resultspb.Result, fieldName string) (timestamp *timestamppb.Timestamp) {
+	switch fieldName {
+	case "create_time":
+		timestamp = result.CreateTime
+
+	case "update_time":
+		timestamp = result.UpdateTime
+
+	case "summary.start_time":
+		if summary := result.Summary; summary != nil {
+			timestamp = summary.StartTime
+		}
+
+	case "summary.end_time":
+		if summary := result.Summary; summary != nil {
+			timestamp = summary.EndTime
+		}
+	}
+	return
+}

@@ -1,11 +1,11 @@
 package cel
 
 import (
-	exprpb "google.golang.org/genproto/googleapis/api/expr/v1alpha1"
-
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/checker/decls"
 	resultspb "github.com/tektoncd/results/proto/v1alpha2/results_go_proto"
+	exprpb "google.golang.org/genproto/googleapis/api/expr/v1alpha1"
+	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const (
@@ -20,12 +20,17 @@ func NewResultsEnv() (*cel.Env, error) {
 			stringConst("TASK_RUN", typeTaskRun),
 		),
 		cel.Declarations(recordSummaryStatusConsts()...),
-		cel.Types(&resultspb.RecordSummary{}),
+		cel.Types(&resultspb.RecordSummary{},
+			&timestamppb.Timestamp{}),
 		cel.Variable("parent", cel.StringType),
-		cel.Variable("id", cel.StringType),
+		cel.Variable("uid", cel.StringType),
 		cel.Variable("annotations", cel.MapType(cel.StringType, cel.StringType)),
 		cel.Variable("summary",
 			cel.ObjectType("tekton.results.v1alpha2.RecordSummary")),
+		cel.Variable("create_time",
+			cel.ObjectType("google.protobuf.Timestamp")),
+		cel.Variable("update_time",
+			cel.ObjectType("google.protobuf.Timestamp")),
 	)
 }
 
