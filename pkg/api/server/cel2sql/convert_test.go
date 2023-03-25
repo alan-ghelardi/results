@@ -137,8 +137,8 @@ func TestConvertResultExpressions(t *testing.T) {
 		want: "parent LIKE '%' || 'bar'",
 	},
 		{
-			name: "Result.Id field",
-			in:   `id == "foo"`,
+			name: "Result.Uid field",
+			in:   `uid == "foo"`,
 			want: "id = 'foo'",
 		},
 		{
@@ -155,6 +155,16 @@ func TestConvertResultExpressions(t *testing.T) {
 			name: "other operators involving the Result.Annotations field",
 			in:   `annotations["repo"].startsWith("tektoncd")`,
 			want: "annotations->>'repo' LIKE 'tektoncd' || '%'",
+		},
+		{
+			name: "Result.CreateTime field",
+			in:   `create_time > timestamp("2022/10/30T21:45:00.000Z")`,
+			want: "created_time > '2022/10/30T21:45:00.000Z'::TIMESTAMP WITH TIME ZONE",
+		},
+		{
+			name: "Result.UpdateTime field",
+			in:   `update_time > timestamp("2022/10/30T21:45:00.000Z")`,
+			want: "updated_time > '2022/10/30T21:45:00.000Z'::TIMESTAMP WITH TIME ZONE",
 		},
 		{
 			name: "Result.Summary.Record field",
