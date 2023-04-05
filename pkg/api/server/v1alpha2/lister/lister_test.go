@@ -20,6 +20,8 @@ import (
 	"testing"
 	"time"
 
+	resultspb "github.com/tektoncd/results/proto/v1alpha2/results_go_proto"
+
 	"github.com/google/go-cmp/cmp"
 	"github.com/tektoncd/results/pkg/api/server/cel"
 	pagetokenpb "github.com/tektoncd/results/pkg/api/server/v1alpha2/lister/proto/pagetoken_go_proto"
@@ -58,7 +60,7 @@ func TestBuildQuery(t *testing.T) {
 		},
 	}
 
-	lister := &Lister[any, any]{
+	lister := &Lister[any, *resultspb.Result]{
 		queryBuilders: []queryBuilder{
 			&offset{
 				order:     order,

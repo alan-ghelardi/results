@@ -305,7 +305,7 @@ func TestListResults(t *testing.T) {
 
 		want, err := client.ListResults(ctx, &resultsv1alpha2.ListResultsRequest{
 			Parent:  "default",
-			OrderBy: "created_time",
+			OrderBy: "create_time",
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -313,7 +313,7 @@ func TestListResults(t *testing.T) {
 
 		got, err := client.ListResults(ctx, &resultsv1alpha2.ListResultsRequest{
 			Parent:  "-",
-			OrderBy: "created_time",
+			OrderBy: "create_time",
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -378,7 +378,7 @@ func TestListRecords(t *testing.T) {
 
 		want, err := client.ListRecords(ctx, &resultsv1alpha2.ListRecordsRequest{
 			Parent:  "default/results/-",
-			OrderBy: "created_time",
+			OrderBy: "create_time",
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -386,7 +386,7 @@ func TestListRecords(t *testing.T) {
 
 		got, err := client.ListRecords(ctx, &resultsv1alpha2.ListRecordsRequest{
 			Parent:  "-/results/-",
-			OrderBy: "created_time",
+			OrderBy: "create_time",
 		})
 		if err != nil {
 			t.Fatal(err)
