@@ -197,7 +197,7 @@ func TestParseOrderBy(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			gotColumn, gotDirection, err := parseOrderBy(test.in, resultsFieldsToColumns)
+			gotColumn, gotDirection, err := parseOrderBy(test.in, resultFieldsToColumns)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -237,7 +237,7 @@ func TestParseOrderByErrors(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			_, _, err := parseOrderBy(test.in, resultsFieldsToColumns)
+			_, _, err := parseOrderBy(test.in, resultFieldsToColumns)
 			if err == nil {
 				t.Fatal("want error, but got nil")
 			}
