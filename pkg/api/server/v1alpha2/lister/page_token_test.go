@@ -39,12 +39,12 @@ func TestEncodeAndDecodePageToken(t *testing.T) {
 		},
 	}
 
-	encodedData, err := EncodePageToken(pageToken)
+	encodedData, err := encodePageToken(pageToken)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	got, err := DecodePageToken(encodedData)
+	got, err := decodePageToken(encodedData)
 	if err != nil {
 		t.Fatal(err)
 	}

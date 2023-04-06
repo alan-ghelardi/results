@@ -615,7 +615,7 @@ func TestListResults(t *testing.T) {
 		}
 	}
 
-	filter := fmt.Sprintf("annotations[\"foo\"] != %q && annotations[\"foo\"] != %q", results[0].Annotations["foo"], results[1].Annotations["foo"])
+	filter := fmt.Sprintf(`annotations["foo"] != %q && annotations["foo"] != %q`, results[0].Annotations["foo"], results[1].Annotations["foo"])
 	t.Run("paginate results using filter", testPagination(filter, "", results[2:]))
 }
 
