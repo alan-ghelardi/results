@@ -51,7 +51,7 @@ type Converter[M any, W object] func(M) W
 
 // PageTokenGenerator takes a wire object and returns a page token for
 // retrieving more resources from thee API.
-type PageTokenGenerator[W object] func(object W) (*pagetokenpb.PageToken, error)
+type PageTokenGenerator func(object) (string, error)
 
 // Lister is a generic utility to list, filter, sort and paginate Results and
 // Records in a uniform and consistent manner.
@@ -59,7 +59,7 @@ type Lister[M any, W object] struct {
 	queryBuilders    []queryBuilder
 	pageToken        *pagetokenpb.PageToken
 	convert          Converter[M, W]
-	genNextPageToken PageTokenGenerator[W]
+	genNextPageToken PageTokenGenerator
 }
 
 func (l *Lister[M, W]) buildQuery(ctx context.Context, db *gorm.DB) (*gorm.DB, error) {
@@ -112,11 +112,7 @@ func (l *Lister[M, W]) List(ctx context.Context, db *gorm.DB) ([]W, string, erro
 		// Generate the page token using the last resource in thee
 		// returned collection, so it will be used as the starting point
 		// for next queries.
-		if pageToken, genErr := l.genNextPageToken(wire[len(wire)-1]); genErr != nil {
-			return nil, "", status.Error(codes.Internal, genErr.Error())
-		} else {
-			nextPageToken, err = EncodePageToken(pageToken)
-		}
+		nextPageToken, err = l.genNextPageToken(wire[len(wire)-1])
 	}
 
 	return wire, nextPageToken, err
@@ -124,7 +120,7 @@ func (l *Lister[M, W]) List(ctx context.Context, db *gorm.DB) ([]W, string, erro
 
 // OfResults creates a Lister for Result objects.
 func OfResults(env *cel.Env, request *resultspb.ListResultsRequest) (*Lister[*db.Result, *resultspb.Result], error) {
-	pageToken, err := DecodePageToken(strings.TrimSpace(request.GetPageToken()))
+	pageToken, err := decodePageToken(strings.TrimSpace(request.GetPageToken()))
 	if err != nil {
 		return nil, err
 	}
@@ -156,28 +152,32 @@ func OfResults(env *cel.Env, request *resultspb.ListResultsRequest) (*Lister[*db
 			order,
 			&limit{pageSize: int(request.GetPageSize())},
 		},
-		pageToken: pageToken,
-		convert:   result.ToAPI,
-		genNextPageToken: func(result *resultspb.Result) (*pagetokenpb.PageToken, error) {
-			pageToken := &pagetokenpb.PageToken{
-				Parent: parent,
-				Filter: filter.expr,
-				LastItem: &pagetokenpb.Item{
-					Uid: result.Uid,
-				},
-			}
-
-			if fieldName := order.fieldName; fieldName != "" {
-				pageToken.LastItem.OrderBy = &pagetokenpb.Order{
-					FieldName: fieldName,
-					Value:     getTimestamp(result, fieldName),
-					Direction: pagetokenpb.Order_Direction(pagetokenpb.Order_Direction_value[order.direction]),
-				}
-			}
-
-			return pageToken, nil
-		},
+		pageToken:        pageToken,
+		convert:          result.ToAPI,
+		genNextPageToken: makePageTokenGenerator(parent, filter.expr, order),
 	}, nil
+}
+
+func makePageTokenGenerator(parent, filter string, order *order) PageTokenGenerator {
+	return func(obj object) (string, error) {
+		pageToken := &pagetokenpb.PageToken{
+			Parent: parent,
+			Filter: filter,
+			LastItem: &pagetokenpb.Item{
+				Uid: obj.GetUid(),
+			},
+		}
+
+		if fieldName := order.fieldName; fieldName != "" {
+			pageToken.LastItem.OrderBy = &pagetokenpb.Order{
+				FieldName: fieldName,
+				Value:     getTimestamp(obj, fieldName),
+				Direction: pagetokenpb.Order_Direction(pagetokenpb.Order_Direction_value[order.direction]),
+			}
+		}
+
+		return encodePageToken(pageToken)
+	}
 }
 
 func getTimestamp(in object, fieldName string) (timestamp *timestamppb.Timestamp) {
@@ -207,7 +207,7 @@ func getTimestamp(in object, fieldName string) (timestamp *timestamppb.Timestamp
 
 // OfRecords creates a Lister for Record objects.
 func OfRecords(env *cel.Env, resultParent, resultName string, request *resultspb.ListRecordsRequest) (*Lister[*db.Record, *resultspb.Record], error) {
-	pageToken, err := DecodePageToken(strings.TrimSpace(request.GetPageToken()))
+	pageToken, err := decodePageToken(strings.TrimSpace(request.GetPageToken()))
 	if err != nil {
 		return nil, err
 	}
@@ -243,26 +243,8 @@ func OfRecords(env *cel.Env, resultParent, resultName string, request *resultspb
 			order,
 			&limit{pageSize: int(request.GetPageSize())},
 		},
-		pageToken: pageToken,
-		convert:   record.ToAPI,
-		genNextPageToken: func(record *resultspb.Record) (*pagetokenpb.PageToken, error) {
-			pageToken := &pagetokenpb.PageToken{
-				Parent: parent,
-				Filter: filter.expr,
-				LastItem: &pagetokenpb.Item{
-					Uid: record.Uid,
-				},
-			}
-
-			if fieldName := order.fieldName; fieldName != "" {
-				pageToken.LastItem.OrderBy = &pagetokenpb.Order{
-					FieldName: fieldName,
-					Value:     getTimestamp(record, fieldName),
-					Direction: pagetokenpb.Order_Direction(pagetokenpb.Order_Direction_value[order.direction]),
-				}
-			}
-
-			return pageToken, nil
-		},
+		pageToken:        pageToken,
+		convert:          record.ToAPI,
+		genNextPageToken: makePageTokenGenerator(parent, filter.expr, order),
 	}, nil
 }
