@@ -23,9 +23,9 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// DecodePageToken attempts to convert the provided token into a PageToken
+// decodePageToken attempts to convert the provided token into a PageToken
 // object.
-func DecodePageToken(in string) (*pagetokenpb.PageToken, error) {
+func decodePageToken(in string) (*pagetokenpb.PageToken, error) {
 	if in == "" {
 		return nil, nil
 	}
@@ -40,9 +40,9 @@ func DecodePageToken(in string) (*pagetokenpb.PageToken, error) {
 	return pageToken, nil
 }
 
-// EncodePageToken turns the PageToken object into a string suitable to be
+// encodePageToken turns the PageToken object into a string suitable to be
 // delivered by the API.
-func EncodePageToken(in *pagetokenpb.PageToken) (string, error) {
+func encodePageToken(in *pagetokenpb.PageToken) (string, error) {
 	wire, err := proto.Marshal(in)
 	if err != nil {
 		return "", status.Error(codes.Internal, err.Error())

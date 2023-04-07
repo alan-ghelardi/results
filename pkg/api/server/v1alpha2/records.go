@@ -20,12 +20,10 @@ import (
 	"github.com/golang/protobuf/ptypes/empty"
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/checker/decls"
-	celenv "github.com/tektoncd/results/pkg/api/server/cel"
-	"github.com/tektoncd/results/pkg/api/server/cel2sql"
 	"github.com/tektoncd/results/pkg/api/server/db"
 	"github.com/tektoncd/results/pkg/api/server/db/errors"
-	"github.com/tektoncd/results/pkg/api/server/db/pagination"
 	"github.com/tektoncd/results/pkg/api/server/v1alpha2/auth"
+	"github.com/tektoncd/results/pkg/api/server/v1alpha2/lister"
 	"github.com/tektoncd/results/pkg/api/server/v1alpha2/record"
 	"github.com/tektoncd/results/pkg/api/server/v1alpha2/result"
 	"github.com/tektoncd/results/pkg/internal/protoutil"
@@ -64,6 +62,7 @@ func (s *Server) CreateRecord(ctx context.Context, req *pb.CreateRecordRequest) 
 	// Populate Result with server provided fields.
 	protoutil.ClearOutputOnly(r)
 	r.Id = uid()
+	r.Uid = r.Id
 	ts := timestamppb.New(clock.Now())
 	r.CreatedTime = ts
 	r.CreateTime = ts
@@ -84,7 +83,7 @@ func (s *Server) CreateRecord(ctx context.Context, req *pb.CreateRecordRequest) 
 		return nil, err
 	}
 
-	return record.ToAPI(store)
+	return record.ToAPI(store), nil
 }
 
 // resultID is a utility struct to extract partial Result data representing
@@ -120,7 +119,7 @@ func (s *Server) GetRecord(ctx context.Context, req *pb.GetRecordRequest) (*pb.R
 	if err != nil {
 		return nil, err
 	}
-	return record.ToAPI(r)
+	return record.ToAPI(r), nil
 }
 
 func getRecord(txn *gorm.DB, parent, result, name string) (*db.Record, error) {
@@ -139,7 +138,7 @@ func getRecord(txn *gorm.DB, parent, result, name string) (*db.Record, error) {
 	return store, nil
 }
 
-func (s *Server) ListRecordsV2(ctx context.Context, req *pb.ListRecordsRequest) (*pb.ListRecordsResponse, error) {
+func (s *Server) ListRecords(ctx context.Context, req *pb.ListRecordsRequest) (*pb.ListRecordsResponse, error) {
 	if req.GetParent() == "" {
 		return nil, status.Error(codes.InvalidArgument, "parent missing")
 	}
@@ -153,48 +152,18 @@ func (s *Server) ListRecordsV2(ctx context.Context, req *pb.ListRecordsRequest) 
 		return nil, err
 	}
 
-	q := s.db.WithContext(ctx)
-
-	// Specifying `-` allows users to read Results from any parent.
-	// See https://google.aip.dev/159 for more details.
-	if  parent != "-" {
-		q = q.Where("parent = ?", parent)
-	}
-
-	if resultName != "-" {
-		q = q.Where("result_name = ?", resultName)
-	}
-
-	if filter := req.GetFilter(); filter != "" {
-		sqlFilters, err := cel2sql.Convert(s.recordsEnv, filter)
-		if err != nil {
-			return nil, status.Error(codes.InvalidArgument, err.Error())
-		}
-		q = q.Where(sqlFilters)
-	}
-
-	if sortOrder, err := orderBy(req.GetOrderBy()); err != nil {
-		return nil, err
-	} else if sortOrder != "" {
-		q = q.Order(sortOrder)
-	}
-
-	dbrecords := make([]*db.Record, 0)
-	q.Find(&dbrecords)
-	if err := errors.Wrap(q.Error); err != nil {
+	recordsLister, err := lister.OfRecords(s.recordsEnv, parent, resultName, req)
+	if err != nil {
 		return nil, err
 	}
-	out := make([]*pb.Record, 0)
-	for _, model := range dbrecords {
-		apiObject, err := record.ToAPI(model)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, apiObject)
+
+	records, nextPageToken, err := recordsLister.List(ctx, s.db)
+	if err != nil {
+		return nil, err
 	}
 
-	// If we found no record, check if result exists so we can return NotFound
-	if len(out) == 0 {
+	// If we found no records, check if result exists so we can return NotFound
+	if len(records) == 0 {
 		_, err := getResultByParentName(s.db, parent, resultName)
 		if err != nil {
 			return nil, err
@@ -202,131 +171,9 @@ func (s *Server) ListRecordsV2(ctx context.Context, req *pb.ListRecordsRequest) 
 	}
 
 	return &pb.ListRecordsResponse{
-		Records: out,
+		Records:       records,
+		NextPageToken: nextPageToken,
 	}, nil
-}
-
-func (s *Server) ListRecords(ctx context.Context, req *pb.ListRecordsRequest) (*pb.ListRecordsResponse, error) {
-	if req.GetParent() == "" {
-		return nil, status.Error(codes.InvalidArgument, "parent missing")
-	}
-	parent, _, err := result.ParseName(req.GetParent())
-	if err != nil {
-		return nil, err
-	}
-	if err := s.auth.Check(ctx, parent, auth.ResourceRecords, auth.PermissionList); err != nil {
-		return nil, err
-	}
-
-	userPageSize, err := pageSize(int(req.GetPageSize()))
-	if err != nil {
-		return nil, err
-	}
-
-	start, err := pageStart(req.GetPageToken(), req.GetFilter())
-	if err != nil {
-		return nil, err
-	}
-
-	sortOrder, err := orderBy(req.GetOrderBy())
-	if err != nil {
-		return nil, err
-	}
-
-	env, err := recordCEL()
-	if err != nil {
-		return nil, err
-	}
-	prg, err := celenv.ParseFilter(env, req.GetFilter())
-	if err != nil {
-		return nil, err
-	}
-	// Fetch n+1 items to get the next token.
-	out, err := s.getFilteredPaginatedSortedRecords(ctx, req.GetParent(), start, userPageSize+1, prg, sortOrder)
-	if err != nil {
-		return nil, err
-	}
-
-	// If we returned the full n+1 items, use the last element as the next page
-	// token.
-	var nextToken string
-	if len(out) > userPageSize {
-		next := out[len(out)-1]
-		var err error
-		nextToken, err = pagination.EncodeToken(next.GetId(), req.GetFilter())
-		if err != nil {
-			return nil, err
-		}
-		out = out[:len(out)-1]
-	}
-
-	return &pb.ListRecordsResponse{
-		Records:       out,
-		NextPageToken: nextToken,
-	}, nil
-}
-
-// getFilteredPaginatedSortedRecords returns the specified number of results that
-// match the given CEL program.
-func (s *Server) getFilteredPaginatedSortedRecords(ctx context.Context, parent, start string, pageSize int, prg cel.Program, sortOrder string) ([]*pb.Record, error) {
-	parent, result, err := result.ParseName(parent)
-	if err != nil {
-		return nil, err
-	}
-
-	out := make([]*pb.Record, 0, pageSize)
-	batcher := pagination.NewBatcher(pageSize, minPageSize, maxPageSize)
-	for len(out) < pageSize {
-		batchSize := batcher.Next()
-		dbrecords := make([]*db.Record, 0, batchSize)
-		q := s.db.WithContext(ctx).Where("id > ?", start)
-		// Specifying `-` allows users to read Records across Results.
-		// See https://google.aip.dev/159 for more details.
-		if parent != "-" {
-			q = q.Where("parent = ?", parent)
-		}
-		if result != "-" {
-			q = q.Where("result_name = ?", result)
-		}
-		if sortOrder != "" {
-			q = q.Order(sortOrder)
-		}
-		q = q.Limit(batchSize).Find(&dbrecords)
-		if err := errors.Wrap(q.Error); err != nil {
-			return nil, err
-		}
-
-		// Only return results that match the filter.
-		for _, r := range dbrecords {
-			api, err := record.ToAPI(r)
-			if err != nil {
-				return nil, err
-			}
-			ok, err := record.Match(api, prg)
-			if err != nil {
-				return nil, err
-			}
-			if !ok {
-				continue
-			}
-
-			out = append(out, api)
-			if len(out) >= pageSize {
-				return out, nil
-			}
-		}
-
-		// We fetched fewer results than requested - this means we've exhausted
-		// all items.
-		if len(dbrecords) < batchSize {
-			break
-		}
-
-		// Set params for next batch.
-		start = dbrecords[len(dbrecords)-1].ID
-		batcher.Update(len(dbrecords), batchSize)
-	}
-	return out, nil
 }
 
 // UpdateRecord updates a record in the database.
@@ -357,10 +204,7 @@ func (s *Server) UpdateRecord(ctx context.Context, req *pb.UpdateRecordRequest) 
 		}
 
 		// Merge existing data with user request.
-		pb, err := record.ToAPI(r)
-		if err != nil {
-			return err
-		}
+		pb := record.ToAPI(r)
 		// TODO: field mask support.
 		proto.Merge(pb, in)
 

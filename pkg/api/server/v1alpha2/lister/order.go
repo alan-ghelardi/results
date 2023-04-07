@@ -33,7 +33,7 @@ const (
 )
 
 var (
-	resultsFieldsToColumns = map[string]string{
+	resultFieldsToColumns = map[string]string{
 		"create_time": "created_time",
 		"update_time": "updated_time",
 
@@ -42,7 +42,14 @@ var (
 		"summary.end_time":   "recordsummary_end_time",
 	}
 
-	resultsColumnsToFields = invertMap(resultsFieldsToColumns)
+	resultColumnsToFields = invertMap(resultFieldsToColumns)
+
+	recordFieldsToColumns = map[string]string{
+		"create_time": "created_time",
+		"update_time": "updated_time",
+	}
+
+	recordColumnsToFields = invertMap(recordFieldsToColumns)
 
 	orderByPattern = regexp.MustCompile(`^([\w\.]+)\s*(ASC|asc|DESC|desc)?$`)
 )
@@ -124,7 +131,7 @@ func parseOrderBy(in string, fieldsToColumns map[string]string) (columnName stri
 // OrderBy field's correct format.
 func explainOrderByFormat(fieldsToColumns map[string]string) string {
 	validFields := make([]string, 0, len(fieldsToColumns))
-	for field, _ := range fieldsToColumns {
+	for field := range fieldsToColumns {
 		validFields = append(validFields, field)
 	}
 	sort.Strings(validFields)
