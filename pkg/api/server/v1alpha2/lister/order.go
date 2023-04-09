@@ -42,25 +42,13 @@ var (
 		"summary.end_time":   "recordsummary_end_time",
 	}
 
-	resultColumnsToFields = invertMap(resultFieldsToColumns)
-
 	recordFieldsToColumns = map[string]string{
 		"create_time": "created_time",
 		"update_time": "updated_time",
 	}
 
-	recordColumnsToFields = invertMap(recordFieldsToColumns)
-
 	orderByPattern = regexp.MustCompile(`^([\w\.]+)\s*(ASC|asc|DESC|desc)?$`)
 )
-
-func invertMap(m map[string]string) map[string]string {
-	i := make(map[string]string, len(m))
-	for key, value := range m {
-		i[value] = key
-	}
-	return i
-}
 
 type order struct {
 	columnName string
@@ -101,21 +89,21 @@ func (o *order) build(db *gorm.DB) (*gorm.DB, error) {
 
 // parseOrderBy attempts to parse the input into a suitable tuple of column and
 // direction to be used in the sql order by clause.
-func parseOrderBy(in string, fieldsToColumns map[string]string) (columnName string, direction string, err error) {
+func parseOrderBy(in string, fieldsToColumns map[string]string) (columnName string, fieldName string, direction string, err error) {
 	in = strings.TrimSpace(in)
 	if in == "" {
-		return "", "", nil
+		return "", "", "", nil
 	}
 
 	matches := orderByPattern.FindStringSubmatch(in)
 	if matches == nil {
-		return "", "", status.Errorf(codes.InvalidArgument, "invalid order by statement:\n%s", explainOrderByFormat(fieldsToColumns))
+		return "", "", "", status.Errorf(codes.InvalidArgument, "invalid order by statement:\n%s", explainOrderByFormat(fieldsToColumns))
 	}
 
-	fieldName := matches[1]
+	fieldName = matches[1]
 	columnName = fieldsToColumns[fieldName]
 	if columnName == "" {
-		return "", "", status.Errorf(codes.InvalidArgument, "%s: field is unknown or cannot be used in the order by clause\n%s", fieldName, explainOrderByFormat(fieldsToColumns))
+		return "", "", "", status.Errorf(codes.InvalidArgument, "%s: field is unknown or cannot be used in the order by clause\n%s", fieldName, explainOrderByFormat(fieldsToColumns))
 	}
 
 	if desiredDirection := matches[2]; desiredDirection == "" {
@@ -139,14 +127,14 @@ func explainOrderByFormat(fieldsToColumns map[string]string) string {
 }
 
 // newOrder creates a new order object from the provided orderBy value.
-func newOrder(orderBy string, columnsToFields, fieldsToColumns map[string]string) (*order, error) {
-	column, direction, err := parseOrderBy(orderBy, fieldsToColumns)
+func newOrder(orderBy string, fieldsToColumns map[string]string) (*order, error) {
+	column, field, direction, err := parseOrderBy(orderBy, fieldsToColumns)
 	if err != nil {
 		return nil, err
 	}
 	return &order{
 		columnName: column,
-		fieldName:  columnsToFields[column],
+		fieldName:  field,
 		direction:  direction,
 	}, nil
 }

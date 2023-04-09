@@ -150,60 +150,72 @@ func TestParseOrderBy(t *testing.T) {
 		name      string
 		in        string
 		column    string
+		field     string
 		direction string
 	}{{
 		name:      "valid order by statement",
 		in:        "create_time DESC",
 		column:    "created_time",
+		field:     "create_time",
 		direction: "DESC",
 	},
 		{
 			name:      "sort in ascending order",
 			in:        "create_time ASC",
 			column:    "created_time",
+			field:     "create_time",
 			direction: "ASC",
 		},
 		{
 			name:      "update_time field omitting the direction",
 			in:        "update_time",
 			column:    "updated_time",
+			field:     "update_time",
 			direction: "ASC",
 		},
 		{
 			name:      "summary.start_time field",
 			in:        "summary.start_time asc",
 			column:    "recordsummary_start_time",
+			field:     "summary.start_time",
 			direction: "ASC",
 		},
 		{
 			name:      "summary.end_time field",
 			in:        "summary.end_time desc",
 			column:    "recordsummary_end_time",
+			field:     "summary.end_time",
 			direction: "DESC",
 		},
 		{
 			name:      "trailing and leading spaces",
 			in:        "  summary.start_time   asc ",
 			column:    "recordsummary_start_time",
+			field:     "summary.start_time",
 			direction: "ASC",
 		},
 		{
 			name:      "trailing and leading spaces with no direction",
 			in:        "  summary.start_time   ",
 			column:    "recordsummary_start_time",
+			field:     "summary.start_time",
 			direction: "ASC",
 		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			gotColumn, gotDirection, err := parseOrderBy(test.in, resultFieldsToColumns)
+			gotColumn, gotField, gotDirection, err := parseOrderBy(test.in, resultFieldsToColumns)
 			if err != nil {
 				t.Fatal(err)
 			}
 
 			if test.column != gotColumn {
 				t.Errorf("Want column %q, but got %q", test.column, gotColumn)
+			}
+
+			if test.field != gotField {
+				t.Errorf("Want field %q, but got %q", test.field, gotField)
 			}
 
 			if test.direction != gotDirection {
@@ -237,7 +249,7 @@ func TestParseOrderByErrors(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			_, _, err := parseOrderBy(test.in, resultFieldsToColumns)
+			_, _, _, err := parseOrderBy(test.in, resultFieldsToColumns)
 			if err == nil {
 				t.Fatal("want error, but got nil")
 			}

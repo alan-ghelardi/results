@@ -32,12 +32,20 @@ import (
 	"gorm.io/gorm"
 )
 
-// object represents commonalities of Results and Records for the purposes of
+// wireObject represents commonalities of Results and Records for the purposes of
 // this package.
-type object interface {
+type wireObject interface {
 	GetUid() string
 	GetCreateTime() *timestamppb.Timestamp
 	GetUpdateTime() *timestamppb.Timestamp
+}
+
+type request interface {
+	GetParent() string
+	GetFilter() string
+	GetOrderBy() string
+	GetPageSize() int32
+	GetPageToken() string
 }
 
 type queryBuilder interface {
@@ -47,15 +55,15 @@ type queryBuilder interface {
 
 // Converter is a generic function which converts a database model to its wire
 // form.
-type Converter[M any, W object] func(M) W
+type Converter[M any, W wireObject] func(M) W
 
 // PageTokenGenerator takes a wire object and returns a page token for
 // retrieving more resources from thee API.
-type PageTokenGenerator func(object) (string, error)
+type PageTokenGenerator func(wireObject) (string, error)
 
 // Lister is a generic utility to list, filter, sort and paginate Results and
 // Records in a uniform and consistent manner.
-type Lister[M any, W object] struct {
+type Lister[M any, W wireObject] struct {
 	queryBuilders    []queryBuilder
 	pageToken        *pagetokenpb.PageToken
 	convert          Converter[M, W]
@@ -120,46 +128,49 @@ func (l *Lister[M, W]) List(ctx context.Context, db *gorm.DB) ([]W, string, erro
 
 // OfResults creates a Lister for Result objects.
 func OfResults(env *cel.Env, request *resultspb.ListResultsRequest) (*Lister[*db.Result, *resultspb.Result], error) {
-	pageToken, err := decodePageToken(strings.TrimSpace(request.GetPageToken()))
+	return newLister(env, resultFieldsToColumns, request, result.ToAPI, equalityClause{
+		columnName: "parent",
+		value:      strings.TrimSpace(request.GetParent()),
+	})
+}
+
+func newLister[M any, W wireObject](env *cel.Env, fieldsToColumns map[string]string, listObjectsRequest request, convert Converter[M, W], clauses ...equalityClause) (*Lister[M, W], error) {
+	pageToken, err := decodePageToken(strings.TrimSpace(listObjectsRequest.GetPageToken()))
 	if err != nil {
 		return nil, err
 	}
 
-	parent := strings.TrimSpace(request.GetParent())
+	parent := strings.TrimSpace(listObjectsRequest.GetParent())
 	if pageToken != nil && pageToken.Parent != parent {
 		return nil, status.Errorf(codes.InvalidArgument, "invalid page token: provided parent (%s) differs from the parent used in the previous query (%s)", parent, pageToken.Parent)
 	}
 
-	order, err := newOrder(strings.TrimSpace(request.GetOrderBy()), resultColumnsToFields, resultFieldsToColumns)
+	order, err := newOrder(strings.TrimSpace(listObjectsRequest.GetOrderBy()), resultFieldsToColumns)
 	if err != nil {
 		return nil, err
 	}
 
 	filter := &filter{
-		env:  env,
-		expr: strings.TrimSpace(request.GetFilter()),
-		equalityClauses: []equalityClause{{
-			columnName: "parent",
-			value:      parent,
-		},
-		},
+		env:             env,
+		expr:            strings.TrimSpace(listObjectsRequest.GetFilter()),
+		equalityClauses: clauses,
 	}
 
-	return &Lister[*db.Result, *resultspb.Result]{
+	return &Lister[M, W]{
 		queryBuilders: []queryBuilder{
 			&offset{order: order, pageToken: pageToken},
 			filter,
 			order,
-			&limit{pageSize: int(request.GetPageSize())},
+			&limit{pageSize: int(listObjectsRequest.GetPageSize())},
 		},
 		pageToken:        pageToken,
-		convert:          result.ToAPI,
+		convert:          convert,
 		genNextPageToken: makePageTokenGenerator(parent, filter.expr, order),
 	}, nil
 }
 
 func makePageTokenGenerator(parent, filter string, order *order) PageTokenGenerator {
-	return func(obj object) (string, error) {
+	return func(obj wireObject) (string, error) {
 		pageToken := &pagetokenpb.PageToken{
 			Parent: parent,
 			Filter: filter,
@@ -180,7 +191,7 @@ func makePageTokenGenerator(parent, filter string, order *order) PageTokenGenera
 	}
 }
 
-func getTimestamp(in object, fieldName string) (timestamp *timestamppb.Timestamp) {
+func getTimestamp(in wireObject, fieldName string) (timestamp *timestamppb.Timestamp) {
 	switch fieldName {
 	case "create_time":
 		timestamp = in.GetCreateTime()
@@ -207,44 +218,12 @@ func getTimestamp(in object, fieldName string) (timestamp *timestamppb.Timestamp
 
 // OfRecords creates a Lister for Record objects.
 func OfRecords(env *cel.Env, resultParent, resultName string, request *resultspb.ListRecordsRequest) (*Lister[*db.Record, *resultspb.Record], error) {
-	pageToken, err := decodePageToken(strings.TrimSpace(request.GetPageToken()))
-	if err != nil {
-		return nil, err
-	}
-
-	parent := strings.TrimSpace(request.GetParent())
-	if pageToken != nil && pageToken.Parent != parent {
-		return nil, status.Errorf(codes.InvalidArgument, "invalid page token: provided parent (%s) differs from the parent used in the previous query (%s)", parent, pageToken.Parent)
-	}
-
-	order, err := newOrder(strings.TrimSpace(request.GetOrderBy()), recordColumnsToFields, recordFieldsToColumns)
-	if err != nil {
-		return nil, err
-	}
-
-	filter := &filter{
-		env:  env,
-		expr: strings.TrimSpace(request.GetFilter()),
-		equalityClauses: []equalityClause{{
-			columnName: "parent",
-			value:      resultParent,
-		},
-			{
-				columnName: "result_name",
-				value:      resultName,
-			},
-		},
-	}
-
-	return &Lister[*db.Record, *resultspb.Record]{
-		queryBuilders: []queryBuilder{
-			&offset{order: order, pageToken: pageToken},
-			filter,
-			order,
-			&limit{pageSize: int(request.GetPageSize())},
-		},
-		pageToken:        pageToken,
-		convert:          record.ToAPI,
-		genNextPageToken: makePageTokenGenerator(parent, filter.expr, order),
-	}, nil
+	return newLister(env, recordFieldsToColumns, request, record.ToAPI, equalityClause{
+		columnName: "parent",
+		value:      resultParent,
+	},
+		equalityClause{
+			columnName: "result_name",
+			value:      resultName,
+		})
 }
