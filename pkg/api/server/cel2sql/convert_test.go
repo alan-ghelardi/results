@@ -105,6 +105,11 @@ func TestConvertRecordExpressions(t *testing.T) {
 			in:   `data_type == PIPELINE_RUN`,
 			want: "type = 'tekton.dev/v1beta1.PipelineRun'",
 		},
+		{
+			name: "index operator in JSON arrays",
+			in:   `data_type == "tekton.dev/v1beta1.TaskRun" && data.status.conditions[0].status == "True"`,
+			want: "type = 'tekton.dev/v1beta1.TaskRun' AND data->'status'->'conditions'->0->>'status' = 'True'",
+		},
 	}
 
 	env, err := cel.NewRecordsEnv()
