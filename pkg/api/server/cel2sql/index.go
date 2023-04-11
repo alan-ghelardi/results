@@ -31,6 +31,23 @@ func isIndexOperator(symbol string) bool {
 	return symbol == operators.Index
 }
 
+func (i *interpreter) getIndexKey(expr *exprpb.Expr) (any, error) {
+	callExprArgs := expr.GetCallExpr().GetArgs()
+	lastArg := callExprArgs[len(callExprArgs)-1]
+	key := lastArg.GetConstExpr()
+
+	switch key.ConstantKind.(type) {
+	case *exprpb.Constant_Int64Value:
+		return key.GetInt64Value(), nil
+
+	case *exprpb.Constant_StringValue:
+		return key.GetStringValue(), nil
+
+	default:
+		return nil, i.unsupportedExprError(lastArg.Id, "constant")
+	}
+}
+
 func (i *interpreter) translateIntoJSONPathContainsExpression(arg1 *exprpb.Expr, arg2 *exprpb.Expr) error {
 	callExprArgs := arg1.GetCallExpr().GetArgs()
 	key := callExprArgs[len(callExprArgs)-1]

@@ -151,24 +151,36 @@ func (i *interpreter) interpretIdentExpr(id int64, expr *exprpb.Expr_IdentExpr) 
 }
 
 func (i *interpreter) interpretSelectExpr(id int64, expr *exprpb.Expr_SelectExpr, additionalExprs ...*exprpb.Expr) error {
-	fields := []string{expr.SelectExpr.GetField()}
+	fields := []any{expr.SelectExpr.GetField()}
 
 	target := expr.SelectExpr.GetOperand()
 	for target != nil {
 		switch target.ExprKind.(type) {
 		case *exprpb.Expr_SelectExpr:
 			fields = append(fields, target.GetSelectExpr().GetField())
+			target = target.GetSelectExpr().GetOperand()
 
 		case *exprpb.Expr_IdentExpr:
 			fields = append(fields, target.GetIdentExpr().GetName())
+			target = nil
+
+		case *exprpb.Expr_CallExpr:
+			if !isIndexExpr(target) {
+				return i.unsupportedExprError(target.Id, "function")
+			}
+			if key, err := i.getIndexKey(target); err != nil {
+				return err
+			} else {
+				fields = append(fields, key)
+				target = target.GetCallExpr().GetArgs()[0]
+			}
 
 		default:
-			return ErrUnsupportedExpression
+			return i.unsupportedExprError(id, "")
 		}
-		target = target.GetSelectExpr().GetOperand()
 	}
 
-	reversedFields := make([]string, len(fields))
+	reversedFields := make([]any, len(fields))
 	for j, k := 0, len(fields)-1; j < len(reversedFields); j, k = j+1, k-1 {
 		reversedFields[j] = fields[k]
 	}
@@ -179,7 +191,7 @@ func (i *interpreter) interpretSelectExpr(id int64, expr *exprpb.Expr_SelectExpr
 			reversedFields = append(reversedFields, node.GetConstExpr().GetStringValue())
 
 		default:
-			return ErrUnsupportedExpression
+			return i.unsupportedExprError(id, "")
 		}
 	}
 
