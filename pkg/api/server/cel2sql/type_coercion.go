@@ -15,6 +15,8 @@
 package cel2sql
 
 import (
+	"fmt"
+
 	exprpb "google.golang.org/genproto/googleapis/api/expr/v1alpha1"
 )
 
@@ -47,6 +49,14 @@ func (i *interpreter) isRecordSummary(expr *exprpb.Expr) bool {
 		}
 	}
 	return false
+}
+func (i *interpreter) isObjectType(fieldName string) (bool, error) {
+	field, found := i.view.Fields[fieldName]
+	if !found {
+		return false, fmt.Errorf("unexpected field: %q", fieldName)
+	}
+
+	return field.ObjectType != nil, nil
 }
 
 // coerceToTypeOf writes a Postgres cast directive to the current position of

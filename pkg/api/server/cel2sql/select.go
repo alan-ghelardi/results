@@ -16,6 +16,7 @@ package cel2sql
 
 import (
 	"fmt"
+	"strings"
 
 	"gorm.io/gorm/schema"
 )
@@ -35,13 +36,21 @@ func (i *interpreter) translateToJSONAccessors(fieldPath []fmt.Stringer) {
 	fmt.Fprintf(&i.query, ")")
 }
 
+func getRawString(s fmt.Stringer) string {
+	switch f := s.(type) {
+	case *Unquoted:
+		return f.s
+	case *SingleQuoted:
+		return f.s
+	}
+	return s.String()
+}
+
 // translateToRecordSummaryColumn
 func (i *interpreter) translateToRecordSummaryColumn(fieldPath []fmt.Stringer) {
 	namer := &schema.NamingStrategy{}
-	switch f := fieldPath[1].(type) {
-	case *Unquoted:
-		fmt.Fprintf(&i.query, "recordsummary_%s", namer.ColumnName("", f.s))
-	case *SingleQuoted:
-		fmt.Fprintf(&i.query, "recordsummary_%s", namer.ColumnName("", f.s))
-	}
+	rawSql := getRawString(fieldPath[0])
+	rawField := getRawString(fieldPath[1])
+	sql := strings.ReplaceAll(rawSql, "{{.Field}}", namer.ColumnName("", rawField))
+	fmt.Fprintf(&i.query, sql)
 }

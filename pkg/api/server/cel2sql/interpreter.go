@@ -36,19 +36,21 @@ var ErrUnsupportedExpression = errors.New("unsupported CEL")
 // filters in the Postgres dialect.
 type interpreter struct {
 	checkedExpr *exprpb.CheckedExpr
+	view        *View
 
 	query strings.Builder
 }
 
 // newInterpreter takes an abstract syntax tree and returns an Interpreter object capable
 // of converting it to a set of SQL filters.
-func newInterpreter(ast *cel.Ast) (*interpreter, error) {
+func newInterpreter(ast *cel.Ast, view *View) (*interpreter, error) {
 	checkedExpr, err := cel.AstToCheckedExpr(ast)
 	if err != nil {
 		return nil, err
 	}
 	return &interpreter{
 		checkedExpr: checkedExpr,
+		view:        view,
 	}, nil
 }
 
@@ -142,22 +144,18 @@ func (i *interpreter) interpretConstExpr(id int64, expr *exprpb.Constant) error 
 	return nil
 }
 
-var identToColumn = map[string]string{
-	"uid":         "id",
-	"create_time": "created_time",
-	"update_time": "updated_time",
-	"data_type":   "type",
-}
-
 func (i *interpreter) interpretIdentExpr(id int64, expr *exprpb.Expr_IdentExpr) error {
 	if reference, found := i.checkedExpr.ReferenceMap[id]; found && reference.GetValue() != nil {
 		return i.interpretConstExpr(id, reference.GetValue())
 	}
 	name := expr.IdentExpr.GetName()
-	if column, found := identToColumn[name]; found {
-		name = column
+
+	field, found := i.view.Fields[name]
+	if !found {
+		return i.unsupportedExprError(id, fmt.Sprintf("unexpected field %q", name))
 	}
-	i.query.WriteString(name)
+
+	i.query.WriteString(field.SQL)
 	return nil
 }
 
@@ -218,7 +216,12 @@ func (i *interpreter) getSelectFields(expr *exprpb.Expr) ([]fmt.Stringer, error)
 		}
 		fields = append(fields, index)
 	case *exprpb.Expr_IdentExpr:
-		fields = append(fields, &Unquoted{node.IdentExpr.GetName()})
+		name := node.IdentExpr.GetName()
+		field, found := i.view.Fields[name]
+		if !found {
+			return fields, fmt.Errorf("unexpected field: %q", name)
+		}
+		fields = append(fields, &Unquoted{field.SQL})
 		target = nil
 	default:
 		return nil, ErrUnsupportedExpression
@@ -266,7 +269,7 @@ func (i *interpreter) interpretSelectExpr(id int64, expr *exprpb.Expr_SelectExpr
 		return nil
 	}
 
-	return fmt.Errorf("%w. %s: not recognized field.", i.unsupportedExprError(id, "select"), reversedFields[0])
+	return fmt.Errorf("%w. %s: not recognized field", i.unsupportedExprError(id, "select"), reversedFields[0])
 }
 
 func (i *interpreter) interpretCallExpr(id int64, expr *exprpb.Expr) error {

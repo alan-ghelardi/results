@@ -15,14 +15,22 @@
 package cel2sql
 
 import (
+	"bytes"
 	"fmt"
 
 	"github.com/google/cel-go/cel"
+
+	"text/template"
 )
 
-// Convert takes CEL expressions and attempt to convert them into Postgres SQL
-// filters.
-func Convert(env *cel.Env, filters string) (string, error) {
+// ConvertView takes a View and CEL expressions and attempt to convert them into
+// Postgres SQL filters.
+func ConvertView(view *View, filters string) (string, error) {
+	env, err := view.GetEnv()
+	if err != nil {
+		return "", fmt.Errorf("invalid view: %w", err)
+	}
+
 	ast, issues := env.Compile(filters)
 	if issues != nil && issues.Err() != nil {
 		return "", fmt.Errorf("error compiling CEL filters: %w", issues.Err())
@@ -32,10 +40,26 @@ func Convert(env *cel.Env, filters string) (string, error) {
 		return "", fmt.Errorf("expected boolean expression, but got %s", outputType.String())
 	}
 
-	interpreter, err := newInterpreter(ast)
+	interpreter, err := newInterpreter(ast, view)
 	if err != nil {
 		return "", fmt.Errorf("error creating cel2sql interpreter: %w", err)
 	}
 
-	return interpreter.interpret()
+	sqlTemplateString, err := interpreter.interpret()
+	if err != nil {
+		return "", err
+	}
+	sqlTemplate, err := template.New("").Option().Parse(sqlTemplateString)
+	if err != nil {
+		return "", err
+	}
+
+	var sql bytes.Buffer
+	err = sqlTemplate.Execute(&sql, map[string]string{
+		"Table": view.TableName,
+	})
+	if err != nil {
+		return "", err
+	}
+	return sql.String(), nil
 }
