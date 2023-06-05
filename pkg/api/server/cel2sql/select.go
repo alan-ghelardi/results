@@ -46,8 +46,8 @@ func getRawString(s fmt.Stringer) string {
 	return s.String()
 }
 
-// translateToRecordSummaryColumn
-func (i *interpreter) translateToRecordSummaryColumn(fieldPath []fmt.Stringer) {
+// translateIntoStruct
+func (i *interpreter) translateIntoStruct(fieldPath []fmt.Stringer) {
 	namer := &schema.NamingStrategy{}
 	rawSql := getRawString(fieldPath[0])
 	rawField := getRawString(fieldPath[1])

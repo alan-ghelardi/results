@@ -15,8 +15,6 @@
 package cel2sql
 
 import (
-	"fmt"
-
 	exprpb "google.golang.org/genproto/googleapis/api/expr/v1alpha1"
 )
 
@@ -40,23 +38,6 @@ func (i *interpreter) isString(expr *exprpb.Expr) bool {
 		}
 	}
 	return false
-}
-
-func (i *interpreter) isRecordSummary(expr *exprpb.Expr) bool {
-	if theType, found := i.checkedExpr.TypeMap[expr.GetId()]; found {
-		if messageType := theType.GetMessageType(); messageType == "tekton.results.v1alpha2.RecordSummary" {
-			return true
-		}
-	}
-	return false
-}
-func (i *interpreter) isObjectType(fieldName string) (bool, error) {
-	field, found := i.view.Fields[fieldName]
-	if !found {
-		return false, fmt.Errorf("unexpected field: %q", fieldName)
-	}
-
-	return field.ObjectType != nil, nil
 }
 
 // coerceToTypeOf writes a Postgres cast directive to the current position of

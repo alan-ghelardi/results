@@ -192,8 +192,9 @@ func (i *interpreter) getIndexKey(expr *exprpb.Expr) (fmt.Stringer, error) {
 	}
 }
 
-func (i *interpreter) getSelectFields(expr *exprpb.Expr) ([]fmt.Stringer, error) {
+func (i *interpreter) getSelectFields(expr *exprpb.Expr) ([]fmt.Stringer, *Field, error) {
 	var target *exprpb.Expr
+	var identField *Field
 	fields := []fmt.Stringer{}
 	switch node := expr.ExprKind.(type) {
 	case *exprpb.Expr_SelectExpr:
@@ -203,43 +204,45 @@ func (i *interpreter) getSelectFields(expr *exprpb.Expr) ([]fmt.Stringer, error)
 	case *exprpb.Expr_CallExpr:
 		if !isIndexExpr(expr) {
 			// TODO: return which function is not supported
-			return nil, i.unsupportedExprError(expr.Id, "function")
+			return nil, identField, i.unsupportedExprError(expr.Id, "function")
 		}
 		// Sanity check, index function should always have two arguments
 		if len(node.CallExpr.Args) != 2 {
-			return nil, ErrUnsupportedExpression
+			return nil, identField, ErrUnsupportedExpression
 		}
 		target = node.CallExpr.Args[0]
 		index, err := i.getIndexKey(expr)
 		if err != nil {
-			return nil, err
+			return nil, identField, err
 		}
 		fields = append(fields, index)
 	case *exprpb.Expr_IdentExpr:
 		name := node.IdentExpr.GetName()
 		field, found := i.view.Fields[name]
 		if !found {
-			return fields, fmt.Errorf("unexpected field: %q", name)
+			return fields, identField, fmt.Errorf("unexpected field: %q", name)
 		}
 		fields = append(fields, &Unquoted{field.SQL})
+		identField = &field
 		target = nil
 	default:
-		return nil, ErrUnsupportedExpression
+		return nil, identField, ErrUnsupportedExpression
 	}
 
 	if target != nil {
-		newFields, err := i.getSelectFields(target)
+		newFields, field, err := i.getSelectFields(target)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
+		identField = field
 		fields = append(fields, newFields...)
 	}
 
-	return fields, nil
+	return fields, identField, nil
 }
 
 func (i *interpreter) interpretSelectExpr(id int64, expr *exprpb.Expr_SelectExpr, additionalExprs ...*exprpb.Expr) error {
-	fields, err := i.getSelectFields(&exprpb.Expr{Id: id, ExprKind: expr})
+	fields, identField, err := i.getSelectFields(&exprpb.Expr{Id: id, ExprKind: expr})
 	if err != nil {
 		return err
 	}
@@ -259,13 +262,13 @@ func (i *interpreter) interpretSelectExpr(id int64, expr *exprpb.Expr_SelectExpr
 		}
 	}
 
-	if i.isDyn(expr.SelectExpr.GetOperand()) {
-		i.translateToJSONAccessors(reversedFields)
+	if identField.ObjectType != nil {
+		i.translateIntoStruct(reversedFields)
 		return nil
 	}
 
-	if i.isRecordSummary(expr.SelectExpr.GetOperand()) {
-		i.translateToRecordSummaryColumn(reversedFields)
+	if i.isDyn(expr.SelectExpr.GetOperand()) {
+		i.translateToJSONAccessors(reversedFields)
 		return nil
 	}
 
